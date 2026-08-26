@@ -1,0 +1,814 @@
+const KEYS = {
+  session: "malsseumgyeol.private.session.v1",
+  records: "malsseumgyeol.private.records.v1",
+  rememberedName: "malsseumgyeol.private.remembered-name.v1",
+  members: "malsseumgyeol.private.members.v1",
+  adminPassword: "malsseumgyeol.private.admin-password.v1",
+};
+
+const DEFAULT_MEMBERS = [
+  { id: "member-kim-gyeongrae", name: "김경래", role: "admin", createdAt: "2026-08-14T00:00:00.000Z" },
+];
+
+const MEMBER_ROLE_LABELS = { member: "일반 멤버", admin: "관리자" };
+
+const VISIBILITY_LABELS = {
+  church: "교회 전체",
+  leaders: "리더 모임",
+  youth: "청년부",
+  smallgroup: "우리 소그룹",
+};
+
+const loginScreen = document.querySelector("#login-screen");
+const appShell = document.querySelector("#app-shell");
+const loginForm = document.querySelector("#login-form");
+const uploadForm = document.querySelector("#upload-form");
+const recordList = document.querySelector("#record-list");
+const searchInput = document.querySelector("#search-input");
+const searchScope = document.querySelector("#search-scope");
+const toast = document.querySelector("#toast");
+const fileInput = document.querySelector("#file-input");
+const selectedFile = document.querySelector("#selected-file");
+const dropZone = document.querySelector("#drop-zone");
+const richEditor = document.querySelector("#rich-editor");
+const editorToolbar = document.querySelector("#editor-toolbar");
+const editorImageInput = document.querySelector("#editor-image-input");
+const insertEditorImageButton = document.querySelector("#insert-editor-image");
+const detailSummary = document.querySelector("#detail-summary");
+const detailEditForm = document.querySelector("#detail-edit-form");
+const detailEditButton = document.querySelector("#detail-edit-button");
+const detailDeleteButton = document.querySelector("#detail-delete-button");
+const detailDownloadButton = document.querySelector("#detail-download-button");
+const detailEditDate = document.querySelector("#detail-edit-date");
+const detailEditPassage = document.querySelector("#detail-edit-passage");
+const detailEditFile = document.querySelector("#detail-edit-file");
+const detailRichEditor = document.querySelector("#detail-rich-editor");
+const detailEditorToolbar = document.querySelector("#detail-editor-toolbar");
+const detailEditorImageInput = document.querySelector("#detail-editor-image-input");
+const detailInsertEditorImageButton = document.querySelector("#detail-insert-editor-image");
+const deleteRecordDialog = document.querySelector("#delete-record-dialog");
+const deleteRecordForm = document.querySelector("#delete-record-form");
+const memberForm = document.querySelector("#member-form");
+const memberList = document.querySelector("#member-list");
+const adminPasswordDialog = document.querySelector("#admin-password-dialog");
+const adminAccessForm = document.querySelector("#admin-access-form");
+const adminAccessPassword = document.querySelector("#admin-access-password");
+const adminPasswordError = document.querySelector("#admin-password-error");
+const backToTopButton = document.querySelector("#back-to-top");
+
+let session = readJson(sessionStorage, KEYS.session, null);
+let records = readJson(localStorage, KEYS.records, []);
+let members = readJson(localStorage, KEYS.members, DEFAULT_MEMBERS);
+let toastTimer;
+let adminUnlocked = false;
+let protectedViewTarget = "admin";
+let protectedActionTarget = null;
+let savedEditorRange = null;
+let activeEditor = richEditor;
+let currentDetailRecordId = null;
+let pendingDeleteRecordId = null;
+
+if (!Array.isArray(members) || !members.length) members = [...DEFAULT_MEMBERS];
+if (!localStorage.getItem(KEYS.members)) writeJson(localStorage, KEYS.members, members);
+
+function readJson(storage, key, fallback) {
+  try {
+    const value = storage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(storage, key, value) {
+  storage.setItem(key, JSON.stringify(value));
+}
+
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function sanitizeEditorHtml(html = "") {
+  const template = document.createElement("template");
+  template.innerHTML = String(html);
+  template.content.querySelectorAll("script, style, iframe, object, embed, link, meta").forEach((element) => element.remove());
+  const allowedTags = new Set(["P", "DIV", "BR", "STRONG", "B", "I", "EM", "U", "S", "UL", "OL", "LI", "BLOCKQUOTE", "H2", "H3", "H4", "IMG", "A", "SPAN", "FONT"]);
+  [...template.content.querySelectorAll("*")].forEach((element) => {
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(...element.childNodes);
+      return;
+    }
+    const textAlign = element.style.textAlign;
+    [...element.attributes].forEach((attribute) => {
+      if (!["src", "alt", "href", "target", "face", "size", "color"].includes(attribute.name)) element.removeAttribute(attribute.name);
+    });
+    if (["left", "center", "right", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
+    if (element.tagName === "IMG" && !/^(data:image\/|https?:\/\/)/i.test(element.getAttribute("src") || "")) element.remove();
+    if (element.tagName === "A" && !/^(https?:\/\/|mailto:)/i.test(element.getAttribute("href") || "")) element.removeAttribute("href");
+    if (element.tagName === "FONT") {
+      const allowedFonts = new Set(["Pretendard", "Georgia", "Gungsuh"]);
+      if (!allowedFonts.has(element.getAttribute("face") || "")) element.removeAttribute("face");
+      if (!/^[1-7]$/.test(element.getAttribute("size") || "")) element.removeAttribute("size");
+      if (!CSS.supports("color", element.getAttribute("color") || "")) element.removeAttribute("color");
+    }
+  });
+  return template.innerHTML;
+}
+
+function showToast(message) {
+  clearTimeout(toastTimer);
+  toast.textContent = message;
+  toast.classList.add("is-visible");
+  toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2600);
+}
+
+function updateBackToTopVisibility() {
+  backToTopButton.hidden = window.scrollY < 320 || appShell.hidden;
+}
+
+function hasUploadPermission() {
+  return session?.role === "admin";
+}
+
+function getAdminPassword() {
+  return localStorage.getItem(KEYS.adminPassword) || "1004";
+}
+
+function applyRoleVisibility() {
+  document.querySelectorAll(".admin-only").forEach((element) => {
+    element.hidden = !hasUploadPermission();
+  });
+}
+
+function enterApp() {
+  if (!session) return;
+  const registeredMember = members.find((member) => member.name === session.name);
+  if (!registeredMember) {
+    leaveApp();
+    showToast("등록되지 않은 이름입니다. 관리자에게 등록을 요청해주세요.");
+    return;
+  }
+  session = { name: registeredMember.name, role: registeredMember.role };
+  writeJson(sessionStorage, KEYS.session, session);
+  loginScreen.hidden = true;
+  appShell.hidden = false;
+  document.querySelector("#user-name").textContent = session.name;
+  document.querySelector("#user-initial").textContent = session.name.slice(0, 1);
+  applyRoleVisibility();
+  switchView("library");
+  renderRecords();
+  renderMembers();
+}
+
+function leaveApp() {
+  sessionStorage.removeItem(KEYS.session);
+  session = null;
+  adminUnlocked = false;
+  appShell.hidden = true;
+  loginScreen.hidden = false;
+  loginForm.reset();
+  restoreRememberedName();
+  history.replaceState(null, "", "#");
+}
+
+function login(name, role) {
+  session = { name: name.trim() || "체험 사용자", role };
+  writeJson(sessionStorage, KEYS.session, session);
+  enterApp();
+  showToast(`${session.name}님, 안전한 자료실에 입장했어요.`);
+}
+
+function restoreRememberedName() {
+  const rememberedName = localStorage.getItem(KEYS.rememberedName) || "";
+  loginForm.elements.name.value = rememberedName;
+  loginForm.elements.rememberName.checked = Boolean(rememberedName);
+}
+
+function switchView(viewName) {
+  if (viewName === "upload" && !hasUploadPermission()) {
+    showToast("자료 등록은 관리자만 할 수 있어요.");
+    viewName = "library";
+  }
+  if (viewName === "admin" && !hasUploadPermission()) {
+    showToast("관리자만 이용할 수 있는 페이지입니다.");
+    viewName = "library";
+  }
+  if (["admin", "upload"].includes(viewName) && !adminUnlocked) return;
+  if (!["admin", "upload"].includes(viewName)) adminUnlocked = false;
+  document.querySelectorAll("[data-view]").forEach((view) => {
+    view.classList.toggle("is-active", view.dataset.view === viewName);
+  });
+  document.querySelectorAll("[data-view-link]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.viewLink === viewName);
+  });
+  history.replaceState(null, "", `#${viewName}`);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("malsseumgyeol-private-files", 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("files")) database.createObjectStore("files", { keyPath: "id" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveFile(id, file, contentHtml = "") {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("files", "readwrite");
+    transaction.objectStore("files").put({ id, file, contentHtml });
+    transaction.oncomplete = () => { database.close(); resolve(); };
+    transaction.onerror = () => { database.close(); reject(transaction.error); };
+  });
+}
+
+async function getRecordAsset(id) {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction("files", "readonly").objectStore("files").get(id);
+    request.onsuccess = () => { database.close(); resolve(request.result || null); };
+    request.onerror = () => { database.close(); reject(request.error); };
+  });
+}
+
+async function getFile(id) {
+  const asset = await getRecordAsset(id);
+  return asset?.file || null;
+}
+
+async function removeFile(id) {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("files", "readwrite");
+    transaction.objectStore("files").delete(id);
+    transaction.oncomplete = () => { database.close(); resolve(); };
+    transaction.onerror = () => { database.close(); reject(transaction.error); };
+  });
+}
+
+function fileExtension(filename) {
+  return filename.includes(".") ? filename.split(".").pop().toUpperCase().slice(0, 5) : "FILE";
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(value) {
+  if (!value) return "일시 미지정";
+  const dateOnly = value.slice(0, 10);
+  return new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric" }).format(new Date(`${dateOnly}T12:00:00`));
+}
+
+function formatUploadedDate(record) {
+  if (record.createdAt) {
+    return new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric" }).format(new Date(record.createdAt));
+  }
+  return formatDate(record.meetingDate);
+}
+
+function formatMeditationRange(record) {
+  return `${formatDate(record.meetingDate)} · ${record.passage || "범위 미지정"}`;
+}
+
+function isNewRecord(record) {
+  if (!record.createdAt) return false;
+  const age = Date.now() - new Date(record.createdAt).getTime();
+  return Number.isFinite(age) && age >= 0 && age < 48 * 60 * 60 * 1000;
+}
+
+function canDelete(record) {
+  return session?.role === "admin" || (session?.role === "uploader" && record.owner === session.name);
+}
+
+function recordCard(record, index) {
+  const viewCount = Math.max(0, Number(record.viewCount) || 0);
+  const newBadge = isNewRecord(record) ? `<span class="record-new-badge">NEW</span>` : "";
+  return `
+    <article class="record-card" data-record-id="${escapeHtml(record.id)}" role="button" tabindex="0" aria-label="${escapeHtml(formatMeditationRange(record))} 상세 보기">
+      <div class="record-cell record-index" data-label="구분">${String(index + 1).padStart(2, "0")}</div>
+      <div class="record-cell record-date" data-label="올린 날짜">${escapeHtml(formatUploadedDate(record))}</div>
+      <div class="record-cell record-passage" data-label="묵상일시 및 범위">${escapeHtml(formatMeditationRange(record))}</div>
+      <div class="record-cell record-owner" data-label="등록자">관리자</div>
+      <div class="record-cell record-status" data-label="조회수"><span class="record-view-count">${viewCount}</span>${newBadge}</div>
+    </article>`;
+}
+
+function renderRecords() {
+  const query = searchInput.value.trim().toLowerCase();
+  const scope = searchScope.value;
+  const visible = records.filter((record) => {
+    const titleText = [record.title, record.passage, formatMeditationRange(record)]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const bodyText = String(record.summary || "").toLowerCase();
+    const text = scope === "title" ? titleText : scope === "body" ? bodyText : `${titleText} ${bodyText}`;
+    return !query || text.includes(query);
+  });
+  recordList.innerHTML = visible.length
+    ? visible.map((record, index) => recordCard(record, index)).join("")
+    : `<div class="empty-state"><strong>${records.length ? "조건에 맞는 자료가 없어요" : "아직 등록된 묵상 자료가 없어요"}</strong>${records.length ? "검색어를 바꿔보세요." : "관리자가 첫 번째 AI 정리 파일을 등록하면 여기에 표시됩니다."}</div>`;
+}
+
+function closeDetailEditor() {
+  detailEditForm.hidden = true;
+  detailSummary.hidden = false;
+  detailEditButton.hidden = false;
+  detailEditFile.value = "";
+}
+
+function normalizeDateInput(value) {
+  if (!value) return localDateValue();
+  return value.slice(0, 10);
+}
+
+async function openRecordDetail(recordId, { countView = true } = {}) {
+  const record = records.find((item) => item.id === recordId);
+  if (!record) return;
+  if (countView) {
+    record.viewCount = Math.max(0, Number(record.viewCount) || 0) + 1;
+    writeJson(localStorage, KEYS.records, records);
+    renderRecords();
+  }
+  currentDetailRecordId = record.id;
+  closeDetailEditor();
+  document.querySelector("#detail-date").textContent = formatUploadedDate(record);
+  document.querySelector("#detail-passage").textContent = `${formatDate(record.meetingDate)}\n${record.passage || "범위 미지정"}`;
+  document.querySelector("#detail-owner").textContent = "관리자";
+  document.querySelector("#detail-file").textContent = record.fileName || "등록 파일 없음";
+  detailDownloadButton.disabled = !record.fileName;
+  detailDownloadButton.setAttribute("aria-label", record.fileName ? `${record.fileName} 다운로드` : "등록 파일 없음");
+  try {
+    const asset = await getRecordAsset(record.id);
+    if (asset?.contentHtml) detailSummary.innerHTML = sanitizeEditorHtml(asset.contentHtml);
+    else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
+  } catch {
+    detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
+  }
+  switchView("detail");
+}
+
+async function openDetailEditor() {
+  const record = records.find((item) => item.id === currentDetailRecordId);
+  if (!record || !hasUploadPermission()) return;
+  detailEditDate.value = normalizeDateInput(record.meetingDate);
+  detailEditPassage.value = record.passage || "";
+  detailEditFile.value = "";
+  try {
+    const asset = await getRecordAsset(record.id);
+    detailRichEditor.innerHTML = asset?.contentHtml
+      ? sanitizeEditorHtml(asset.contentHtml)
+      : (record.summary ? `<p>${escapeHtml(record.summary).replaceAll("\n", "<br>")}</p>` : "");
+  } catch {
+    detailRichEditor.innerHTML = record.summary ? `<p>${escapeHtml(record.summary).replaceAll("\n", "<br>")}</p>` : "";
+  }
+  detailSummary.hidden = true;
+  detailEditForm.hidden = false;
+  detailEditButton.hidden = true;
+  detailRichEditor.focus();
+}
+
+function formatMemberDate(value) {
+  return new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric" }).format(new Date(value));
+}
+
+function renderMembers() {
+  document.querySelector("#member-count").textContent = members.length;
+  memberList.innerHTML = members.map((member, index) => `
+    <article class="member-row">
+      <span class="member-index" data-label="순번">${String(index + 1).padStart(2, "0")}</span>
+      <strong data-label="이름">${escapeHtml(member.name)}</strong>
+      <span class="member-role ${member.role === "admin" ? "is-admin" : ""}" data-label="권한">${MEMBER_ROLE_LABELS[member.role] || "일반 멤버"}</span>
+      <span class="member-date" data-label="등록일">${escapeHtml(formatMemberDate(member.createdAt))}</span>
+    </article>`).join("");
+}
+
+function validateUpload(file) {
+  const allowed = ["pdf", "ppt", "pptx", "hwp", "hwpx", "doc", "docx", "txt", "md", "jpg", "jpeg", "jfif", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "svgz", "avif", "heic", "heif", "ico"];
+  const extension = file.name.split(".").pop().toLowerCase();
+  if (!allowed.includes(extension) && !file.type.startsWith("image/")) {
+    showToast("PDF, PPT, 한글, Word, 문서 또는 이미지 파일을 선택해주세요.");
+    return false;
+  }
+  if (file.size > 25 * 1024 * 1024) {
+    showToast("파일은 25MB 이하로 올려주세요.");
+    return false;
+  }
+  return true;
+}
+
+function showSelectedFile(file) {
+  selectedFile.textContent = file ? `${file.name} · ${formatSize(file.size)}` : "";
+}
+
+function rememberEditorSelection(editor = activeEditor) {
+  const selection = window.getSelection();
+  if (selection.rangeCount && editor.contains(selection.anchorNode)) {
+    activeEditor = editor;
+    savedEditorRange = selection.getRangeAt(0).cloneRange();
+  }
+}
+
+function restoreEditorSelection(editor = activeEditor) {
+  activeEditor = editor;
+  editor.focus();
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  if (savedEditorRange && editor.contains(savedEditorRange.commonAncestorContainer)) {
+    selection.addRange(savedEditorRange);
+    return;
+  }
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  selection.addRange(range);
+  savedEditorRange = range.cloneRange();
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function insertImagesIntoEditor(files, editor = activeEditor) {
+  const images = [...files].filter((file) => file.type.startsWith("image/"));
+  if (!images.length) {
+    showToast("이미지 파일을 선택해주세요.");
+    return;
+  }
+  restoreEditorSelection(editor);
+  for (const image of images) {
+    if (image.size > 25 * 1024 * 1024) {
+      showToast(`${image.name} 파일은 25MB 이하로 선택해주세요.`);
+      continue;
+    }
+    const dataUrl = await readFileAsDataUrl(image);
+    document.execCommand("insertHTML", false, `<img src="${dataUrl}" alt="${escapeHtml(image.name)}"><p><br></p>`);
+  }
+  rememberEditorSelection(editor);
+}
+
+function setupRichEditor(editor, toolbar, imageInput, insertImageButton) {
+  ["keyup", "mouseup", "input"].forEach((eventName) => {
+    editor.addEventListener(eventName, () => rememberEditorSelection(editor));
+  });
+  editor.addEventListener("blur", () => {
+    if (!editor.textContent.trim() && !editor.querySelector("img")) editor.innerHTML = "";
+  });
+  toolbar.addEventListener("mousedown", (event) => {
+    if (event.target.closest("button")) event.preventDefault();
+  });
+  toolbar.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-editor-command]");
+    if (!button) return;
+    restoreEditorSelection(editor);
+    document.execCommand(button.dataset.editorCommand, false);
+    rememberEditorSelection(editor);
+  });
+  toolbar.addEventListener("change", (event) => {
+    const control = event.target;
+    let command = "";
+    if (control.matches("[data-editor-font]")) command = "fontName";
+    if (control.matches("[data-editor-size]")) command = "fontSize";
+    if (control.matches("[data-editor-color]")) command = "foreColor";
+    if (!command || !control.value) return;
+    restoreEditorSelection(editor);
+    document.execCommand("styleWithCSS", false, false);
+    document.execCommand(command, false, control.value);
+    rememberEditorSelection(editor);
+    if (control.matches("select")) control.value = "";
+  });
+  insertImageButton.addEventListener("click", () => {
+    rememberEditorSelection(editor);
+    imageInput.click();
+  });
+  imageInput.addEventListener("change", async () => {
+    await insertImagesIntoEditor(imageInput.files, editor);
+    imageInput.value = "";
+  });
+  editor.addEventListener("paste", async (event) => {
+    const pastedImages = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+    if (!pastedImages.length) return;
+    event.preventDefault();
+    await insertImagesIntoEditor(pastedImages, editor);
+  });
+}
+
+function localDateValue(date = new Date()) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+loginForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const data = new FormData(loginForm);
+  const name = String(data.get("name") || "").trim();
+  const registeredMember = members.find((member) => member.name === name);
+  if (!registeredMember) {
+    showToast("등록되지 않은 이름입니다. 관리자에게 등록을 요청해주세요.");
+    return;
+  }
+  if (data.get("rememberName")) localStorage.setItem(KEYS.rememberedName, name);
+  else localStorage.removeItem(KEYS.rememberedName);
+  login(registeredMember.name, registeredMember.role);
+});
+
+memberForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!hasUploadPermission()) return;
+  const data = new FormData(memberForm);
+  const name = String(data.get("memberName") || "").trim();
+  const role = String(data.get("memberRole") || "member");
+  if (members.some((member) => member.name === name)) {
+    showToast("이미 등록된 멤버입니다.");
+    return;
+  }
+  members.push({
+    id: crypto.randomUUID ? crypto.randomUUID() : `member-${Date.now()}`,
+    name,
+    role: role === "admin" ? "admin" : "member",
+    createdAt: new Date().toISOString(),
+  });
+  writeJson(localStorage, KEYS.members, members);
+  memberForm.reset();
+  renderMembers();
+  showToast(`${name}님을 새 멤버로 등록했습니다.`);
+});
+
+document.querySelectorAll(".protected-view-trigger").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!hasUploadPermission()) return;
+    protectedActionTarget = null;
+    protectedViewTarget = button.dataset.protectedView || "admin";
+    adminAccessForm.reset();
+    adminPasswordError.textContent = "";
+    adminPasswordDialog.showModal();
+  });
+});
+
+adminAccessForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (adminAccessPassword.value !== getAdminPassword()) {
+    adminPasswordError.textContent = "비밀번호가 올바르지 않습니다.";
+    adminAccessPassword.select();
+    return;
+  }
+  adminUnlocked = true;
+  adminPasswordDialog.close();
+  if (protectedActionTarget) {
+    const action = protectedActionTarget;
+    protectedActionTarget = null;
+    adminUnlocked = false;
+    if (action === "edit-record") openDetailEditor();
+    if (action === "delete-record" && currentDetailRecordId) {
+      pendingDeleteRecordId = currentDetailRecordId;
+      deleteRecordDialog.showModal();
+    }
+    return;
+  }
+  switchView(protectedViewTarget);
+});
+
+document.querySelector("#close-admin-dialog").addEventListener("click", () => {
+  protectedActionTarget = null;
+  adminPasswordDialog.close();
+});
+
+document.querySelector("#change-admin-password").addEventListener("click", () => {
+  const currentPassword = document.querySelector("#current-admin-password");
+  const newPassword = document.querySelector("#new-admin-password");
+  const confirmPassword = document.querySelector("#confirm-admin-password");
+  if (currentPassword.value !== getAdminPassword()) {
+    showToast("현재 비밀번호가 올바르지 않습니다.");
+    currentPassword.focus();
+    return;
+  }
+  if (newPassword.value.length < 4) {
+    showToast("새 비밀번호는 4자리 이상으로 입력해주세요.");
+    newPassword.focus();
+    return;
+  }
+  if (newPassword.value !== confirmPassword.value) {
+    showToast("새 비밀번호가 서로 일치하지 않습니다.");
+    confirmPassword.focus();
+    return;
+  }
+  localStorage.setItem(KEYS.adminPassword, newPassword.value);
+  currentPassword.value = "";
+  newPassword.value = "";
+  confirmPassword.value = "";
+  showToast("관리자 비밀번호를 변경했습니다.");
+});
+
+document.querySelectorAll("[data-view-link]").forEach((button) => {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    switchView(button.dataset.viewLink);
+  });
+});
+
+document.querySelector("#logout-button").addEventListener("click", leaveApp);
+searchInput.addEventListener("input", renderRecords);
+searchScope.addEventListener("change", renderRecords);
+window.addEventListener("scroll", updateBackToTopVisibility, { passive: true });
+backToTopButton.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+
+function requestRecordAdminAction(action) {
+  if (!currentDetailRecordId || !hasUploadPermission()) return;
+  protectedActionTarget = action;
+  adminAccessForm.reset();
+  adminPasswordError.textContent = "";
+  adminPasswordDialog.showModal();
+}
+
+detailEditButton.addEventListener("click", () => requestRecordAdminAction("edit-record"));
+document.querySelector("#detail-edit-cancel").addEventListener("click", closeDetailEditor);
+
+detailDownloadButton.addEventListener("click", async () => {
+  const record = records.find((item) => item.id === currentDetailRecordId);
+  if (!record) return;
+  try {
+    const file = await getFile(record.id);
+    if (!file) {
+      showToast("저장된 파일을 찾을 수 없습니다.");
+      return;
+    }
+    const downloadUrl = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = record.fileName || file.name || "묵상-자료";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    showToast("파일 다운로드를 시작했습니다.");
+  } catch {
+    showToast("파일을 다운로드하지 못했습니다. 다시 시도해주세요.");
+  }
+});
+
+detailDeleteButton.addEventListener("click", () => {
+  requestRecordAdminAction("delete-record");
+});
+
+document.querySelector("#cancel-record-delete").addEventListener("click", () => {
+  pendingDeleteRecordId = null;
+  deleteRecordDialog.close();
+});
+
+deleteRecordForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!pendingDeleteRecordId || !hasUploadPermission()) return;
+  const recordId = pendingDeleteRecordId;
+  try {
+    await removeFile(recordId);
+    records = records.filter((record) => record.id !== recordId);
+    writeJson(localStorage, KEYS.records, records);
+    pendingDeleteRecordId = null;
+    currentDetailRecordId = null;
+    deleteRecordDialog.close();
+    renderRecords();
+    switchView("library");
+    showToast("자료를 삭제했습니다.");
+  } catch {
+    showToast("자료를 삭제하지 못했습니다. 다시 시도해주세요.");
+  }
+});
+
+detailEditFile.addEventListener("change", () => {
+  const file = detailEditFile.files[0];
+  if (file && !validateUpload(file)) detailEditFile.value = "";
+});
+
+detailEditForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!currentDetailRecordId || !hasUploadPermission()) return;
+  const record = records.find((item) => item.id === currentDetailRecordId);
+  if (!record) return;
+  const replacementFile = detailEditFile.files[0];
+  if (replacementFile && !validateUpload(replacementFile)) return;
+  const meetingDate = detailEditDate.value;
+  const passage = detailEditPassage.value.trim();
+  const contentHtml = sanitizeEditorHtml(detailRichEditor.innerHTML);
+  try {
+    const existingAsset = await getRecordAsset(record.id);
+    await saveFile(record.id, replacementFile || existingAsset?.file || null, contentHtml);
+    record.meetingDate = meetingDate;
+    record.passage = passage;
+    record.title = `${passage || "묵상 나눔"} · ${formatDate(meetingDate)}`;
+    record.summary = detailRichEditor.innerText.trim().slice(0, 50000);
+    if (replacementFile) {
+      record.fileName = replacementFile.name;
+      record.fileType = replacementFile.type;
+      record.fileSize = replacementFile.size;
+    }
+    writeJson(localStorage, KEYS.records, records);
+    renderRecords();
+    await openRecordDetail(record.id, { countView: false });
+    showToast("수정 내용을 저장했습니다.");
+  } catch {
+    showToast("수정 내용을 저장하지 못했습니다. 다시 시도해주세요.");
+  }
+});
+
+setupRichEditor(richEditor, editorToolbar, editorImageInput, insertEditorImageButton);
+setupRichEditor(detailRichEditor, detailEditorToolbar, detailEditorImageInput, detailInsertEditorImageButton);
+
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (file && !validateUpload(file)) fileInput.value = "";
+  showSelectedFile(fileInput.files[0]);
+});
+
+["dragenter", "dragover"].forEach((eventName) => {
+  dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.add("is-dragging"); });
+});
+["dragleave", "drop"].forEach((eventName) => {
+  dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.remove("is-dragging"); });
+});
+dropZone.addEventListener("drop", (event) => {
+  const file = event.dataTransfer.files[0];
+  if (!file || !validateUpload(file)) return;
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  fileInput.files = transfer.files;
+  showSelectedFile(file);
+});
+
+uploadForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!hasUploadPermission()) return;
+  const data = new FormData(uploadForm);
+  const file = fileInput.files[0];
+  if (!file || !validateUpload(file)) return;
+
+  const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+  const meetingDate = String(data.get("meetingDate") || "");
+  const passage = String(data.get("passage") || "").trim();
+  const contentHtml = sanitizeEditorHtml(richEditor.innerHTML);
+  const summaryText = richEditor.innerText.trim();
+  const record = {
+    id,
+    title: `${passage || "묵상 나눔"} · ${formatDate(meetingDate)}`,
+    meetingDate,
+    speaker: session.name,
+    passage,
+    visibility: "church",
+    summary: summaryText.slice(0, 50000),
+    fileName: file.name,
+    fileType: file.type,
+    fileSize: file.size,
+    owner: session.name,
+    createdAt: new Date().toISOString(),
+    viewCount: 0,
+  };
+
+  try {
+    await saveFile(id, file, contentHtml);
+    records.unshift(record);
+    writeJson(localStorage, KEYS.records, records);
+    uploadForm.reset();
+    richEditor.innerHTML = "";
+    uploadForm.elements.meetingDate.value = localDateValue();
+    showSelectedFile(null);
+    renderRecords();
+    switchView("library");
+    showToast("승인된 구성원이 볼 수 있도록 자료를 등록했어요.");
+  } catch {
+    showToast("파일 저장 중 문제가 생겼어요. 다시 시도해주세요.");
+  }
+});
+
+recordList.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-record-id]");
+  if (card) openRecordDetail(card.dataset.recordId);
+});
+
+recordList.addEventListener("keydown", (event) => {
+  if (!["Enter", " "].includes(event.key)) return;
+  const card = event.target.closest("[data-record-id]");
+  if (!card) return;
+  event.preventDefault();
+  openRecordDetail(card.dataset.recordId);
+});
+
+uploadForm.elements.meetingDate.value = localDateValue();
+restoreRememberedName();
+if (session) enterApp();

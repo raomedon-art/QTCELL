@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="승인된 교회 구성원만 함께 보는 비공개 묵상 나눔 자료실" />
+    <title>묵상셀 · 비공개 묵상 자료실</title>
+  <link rel="stylesheet" href="./styles.css?v=20260826-46" />
+  </head>
+  <body>
+    <section class="login-screen" id="login-screen">
+      <div class="login-visual">
+        <img class="church-logo-overlay" src="./assets/soyang-church-logo-cutout.png" alt="소양제일교회 기독교대한성결교회" />
+        <div class="login-message">
+          <h1>들었던 말씀을<br />함께 읽는 기록으로...</h1>
+        </div>
+        <div class="login-quote">
+          <span>“</span>
+          <p>서로 돌아보아 사랑과 선행을 격려하며</p>
+          <small>히브리서 10:24</small>
+        </div>
+      </div>
+
+      <div class="login-panel">
+        <div class="login-image-mobile" aria-label="소양제일교회 묵상 이미지">
+          <img class="church-logo-overlay" src="./assets/soyang-church-logo-cutout.png" alt="소양제일교회 기독교대한성결교회" />
+        </div>
+        <form class="login-card" id="login-form">
+          <div class="mobile-brand meditation-cell-brand">
+            <span class="meditation-cell-mark">✦</span><strong>묵상셀</strong>
+          </div>
+          <span class="eyebrow">PRIVATE COMMUNITY</span>
+
+          <label>
+            <span>멤버 이름</span>
+            <input name="name" type="text" autocomplete="name" placeholder="이름을 입력하세요" required />
+          </label>
+          <label class="remember-name">
+            <input name="rememberName" type="checkbox" />
+            <span>이름 저장</span>
+          </label>
+          <button class="button primary wide" type="submit">로그인</button>
+        </form>
+      </div>
+    </section>
+
+    <div class="app-shell" id="app-shell" hidden>
+      <header class="topbar">
+        <div class="user-menu">
+          <button class="admin-entry protected-view-trigger admin-only" type="button" data-protected-view="admin">관리자</button>
+          <button class="profile-button" id="profile-button" aria-label="사용자 메뉴">
+            <span id="user-name"></span><b id="user-initial"></b>
+          </button>
+          <button class="logout-button" id="logout-button">나가기</button>
+        </div>
+        <button class="header-church-brand" type="button" data-view-link="library" aria-label="소양제일교회 로고 · 자료실로 이동">
+          <span class="header-logo-symbol" aria-hidden="true">
+            <img src="./assets/soyang-church-logo-cutout.png" alt="" />
+          </span>
+          <span class="header-church-copy">
+            <strong>소양제일교회</strong>
+            <small>기독교대한성결교회</small>
+          </span>
+        </button>
+      </header>
+
+      <main>
+        <section class="view is-active" data-view="library">
+          <figure class="community-hero">
+            <img src="./assets/community-meditation-hero-v3.png" alt="밝은 공간에서 열린 성경을 중심으로 묵상을 나누는 교회 공동체" />
+            <figcaption class="community-hero-title">
+              <span class="community-hero-symbol" aria-hidden="true">✦</span>
+              <span class="community-hero-copy"><strong>묵상셀</strong><small>MEDITATION CELL</small></span>
+            </figcaption>
+          </figure>
+          <section class="library-section">
+            <div class="section-heading">
+              <div><span class="eyebrow">MEDITATION ARCHIVE</span><h2>묵상 나눔 자료</h2></div>
+              <div class="section-heading-actions">
+                <button class="button secondary compact protected-view-trigger admin-only" type="button" data-protected-view="upload">자료 등록</button>
+              </div>
+            </div>
+
+            <div class="library-toolbar" role="search" aria-label="묵상 자료 검색">
+              <select id="search-scope" aria-label="검색 범위">
+                <option value="all">전체</option>
+                <option value="title">제목</option>
+                <option value="body">본문 내용</option>
+              </select>
+              <label class="search-box">
+                <span aria-hidden="true">⌕</span>
+                <input id="search-input" type="search" placeholder="검색" aria-label="묵상 자료 검색" />
+              </label>
+            </div>
+            <div class="record-list-header" aria-hidden="true">
+              <span>구분</span>
+              <span>올린 날짜</span>
+              <span>묵상일시 및 범위</span>
+              <span>등록자</span>
+              <span>조회수</span>
+            </div>
+            <div class="record-list" id="record-list"></div>
+          </section>
+        </section>
+
+        <section class="view" data-view="detail">
+          <div class="detail-toolbar">
+            <button class="button secondary compact" type="button" data-view-link="library">← 목록으로</button>
+            <div class="detail-record-actions admin-only">
+              <button class="button secondary compact" id="detail-edit-button" type="button">수정</button>
+              <button class="button danger compact" id="detail-delete-button" type="button">삭제</button>
+            </div>
+          </div>
+          <article class="record-detail-card">
+            <div class="detail-meta-grid">
+              <div><span>올린 날짜</span><strong id="detail-date"></strong></div>
+              <div><span>묵상날짜</span><strong id="detail-passage"></strong></div>
+              <div class="detail-file-meta">
+                <span>등록 파일</span>
+                <button class="detail-file-download" id="detail-download-button" type="button">
+                  <strong id="detail-file"></strong><small>다운로드 ↓</small>
+                </button>
+              </div>
+              <div><span>등록자</span><strong id="detail-owner"></strong></div>
+            </div>
+            <section class="detail-content">
+              <div class="rich-content" id="detail-summary"></div>
+              <form class="detail-edit-form" id="detail-edit-form" hidden>
+                <div class="field-grid">
+                  <label class="field"><span>묵상날짜 *</span><input id="detail-edit-date" type="date" required /></label>
+                  <label class="field"><span>나눔범위</span><input id="detail-edit-passage" placeholder="예: 빌립보서 4:6–7" /></label>
+                  <label class="field full"><span>첨부 파일 변경</span><input id="detail-edit-file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" /></label>
+                  <div class="field full rich-editor-field">
+                    <span class="editor-label">묵상 나눔 정리</span>
+                    <div class="editor-toolbar" id="detail-editor-toolbar" role="toolbar" aria-label="묵상 나눔 수정 도구">
+                      <select class="editor-select" data-editor-font aria-label="글씨체 변경">
+                        <option value="">글씨체</option><option value="Pretendard">고딕체</option><option value="Georgia">명조체</option><option value="Gungsuh">궁서체</option>
+                      </select>
+                      <select class="editor-select" data-editor-size aria-label="글자 크기 변경">
+                        <option value="">크기</option><option value="2">작게</option><option value="3">보통</option><option value="4">크게</option><option value="5">매우 크게</option>
+                      </select>
+                      <label class="editor-color-control"><span>색상</span><input type="color" data-editor-color value="#23362f" aria-label="글자 색상 변경" /></label>
+                      <span class="toolbar-divider" aria-hidden="true"></span>
+                      <button type="button" data-editor-command="bold" aria-label="굵게"><b>가</b></button>
+                      <button type="button" data-editor-command="italic" aria-label="기울임"><i>가</i></button>
+                      <button type="button" data-editor-command="underline" aria-label="밑줄"><u>가</u></button>
+                      <span class="toolbar-divider" aria-hidden="true"></span>
+                      <button type="button" data-editor-command="insertUnorderedList" aria-label="글머리 기호 목록">• 목록</button>
+                      <button type="button" data-editor-command="insertOrderedList" aria-label="번호 목록">1. 목록</button>
+                      <span class="toolbar-divider" aria-hidden="true"></span>
+                      <button type="button" data-editor-command="justifyLeft" aria-label="왼쪽 정렬">≡</button>
+                      <button type="button" data-editor-command="justifyCenter" aria-label="가운데 정렬">≣</button>
+                      <button type="button" id="detail-insert-editor-image" aria-label="이미지 삽입">이미지</button>
+                      <input id="detail-editor-image-input" type="file" accept="image/*" multiple hidden />
+                    </div>
+                    <div class="rich-editor" id="detail-rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="묵상 나눔 내용을 입력하고 이미지도 삽입할 수 있습니다."></div>
+                  </div>
+                </div>
+                <div class="detail-edit-actions">
+                  <button class="button secondary" id="detail-edit-cancel" type="button">취소</button>
+                  <button class="button primary" type="submit">수정 저장</button>
+                </div>
+              </form>
+            </section>
+          </article>
+        </section>
+
+        <section class="view" data-view="upload">
+          <div class="page-heading">
+            <span class="eyebrow">NEW MEDITATION</span>
+            <h1>자료 등록</h1>
+          </div>
+
+          <form class="upload-layout" id="upload-form">
+            <div class="form-card">
+              <div class="form-section-heading"><span>01</span><div><h2>기본정보</h2></div></div>
+              <div class="field-grid">
+                <label class="field"><span>묵상날짜 *</span><input name="meetingDate" type="date" required /></label>
+                <label class="field"><span>나눔범위</span><input name="passage" placeholder="예: 빌립보서 4:6–7" /></label>
+                <div class="field full rich-editor-field">
+                  <span class="editor-label">묵상 나눔 정리</span>
+                  <div class="editor-toolbar" id="editor-toolbar" role="toolbar" aria-label="묵상 나눔 편집 도구">
+                    <select class="editor-select" data-editor-font aria-label="글씨체 변경">
+                      <option value="">글씨체</option><option value="Pretendard">고딕체</option><option value="Georgia">명조체</option><option value="Gungsuh">궁서체</option>
+                    </select>
+                    <select class="editor-select" data-editor-size aria-label="글자 크기 변경">
+                      <option value="">크기</option><option value="2">작게</option><option value="3">보통</option><option value="4">크게</option><option value="5">매우 크게</option>
+                    </select>
+                    <label class="editor-color-control"><span>색상</span><input type="color" data-editor-color value="#23362f" aria-label="글자 색상 변경" /></label>
+                    <span class="toolbar-divider" aria-hidden="true"></span>
+                    <button type="button" data-editor-command="bold" aria-label="굵게"><b>가</b></button>
+                    <button type="button" data-editor-command="italic" aria-label="기울임"><i>가</i></button>
+                    <button type="button" data-editor-command="underline" aria-label="밑줄"><u>가</u></button>
+                    <span class="toolbar-divider" aria-hidden="true"></span>
+                    <button type="button" data-editor-command="insertUnorderedList" aria-label="글머리 기호 목록">• 목록</button>
+                    <button type="button" data-editor-command="insertOrderedList" aria-label="번호 목록">1. 목록</button>
+                    <span class="toolbar-divider" aria-hidden="true"></span>
+                    <button type="button" data-editor-command="justifyLeft" aria-label="왼쪽 정렬">≡</button>
+                    <button type="button" data-editor-command="justifyCenter" aria-label="가운데 정렬">≣</button>
+                    <button type="button" id="insert-editor-image" aria-label="이미지 삽입">이미지</button>
+                    <input id="editor-image-input" type="file" accept="image/*" multiple hidden />
+                  </div>
+                  <div class="rich-editor" id="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="묵상 나눔의 정리 내용을 입력하고 이미지도 삽입할 수 있습니다."></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-card">
+              <div class="form-section-heading"><span>02</span><div><h2>업로드하기</h2></div></div>
+              <label class="drop-zone" id="drop-zone">
+                <input id="file-input" name="file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" required />
+                <span class="upload-icon" aria-hidden="true">↑</span>
+                <strong>파일을 선택하거나 여기로 끌어오세요</strong>
+                <small>PDF, PPT, 한글, Word, TXT, Markdown, 이미지 · 최대 25MB</small>
+                <span class="selected-file" id="selected-file"></span>
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button class="button secondary" type="button" data-view-link="library">취소</button>
+              <button class="button primary" type="submit">자료 등록</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" data-view="admin">
+          <div class="page-heading admin-page-heading">
+            <span class="eyebrow">ADMINISTRATION</span>
+            <h1>관리자 페이지</h1>
+            <p>새로운 멤버를 등록하고 공동체 구성원을 확인할 수 있습니다.</p>
+          </div>
+
+          <div class="admin-layout">
+            <form class="form-card member-form" id="member-form">
+              <div class="form-section-heading">
+                <span>+</span>
+                <div><h2>신규 멤버 등록</h2><p>등록된 이름으로만 자료실에 입장할 수 있습니다.</p></div>
+              </div>
+              <label class="field"><span>이름 *</span><input name="memberName" required placeholder="멤버 이름을 입력하세요" /></label>
+              <label class="field"><span>권한 *</span>
+                <select name="memberRole" required>
+                  <option value="member">일반 멤버</option>
+                  <option value="admin">관리자</option>
+                </select>
+              </label>
+              <button class="button primary wide" type="submit">멤버 등록하기</button>
+            </form>
+
+            <section class="member-directory" aria-labelledby="member-directory-title">
+              <div class="member-directory-heading">
+                <div><span class="eyebrow">MEMBERS</span><h2 id="member-directory-title">등록된 멤버</h2></div>
+                <span><b id="member-count">0</b>명</span>
+              </div>
+              <div class="member-list-header" aria-hidden="true">
+                <span>순번</span><span>이름</span><span>권한</span><span>등록일</span>
+              </div>
+              <div class="member-list" id="member-list"></div>
+            </section>
+
+            <section class="form-card password-settings" aria-labelledby="password-settings-title">
+              <div class="form-section-heading">
+                <span>⌁</span>
+                <div><h2 id="password-settings-title">관리자 비밀번호 변경</h2><p>현재 비밀번호 확인 후 새로운 비밀번호로 변경합니다.</p></div>
+              </div>
+              <label class="field"><span>현재 비밀번호 *</span><input id="current-admin-password" type="password" inputmode="numeric" autocomplete="current-password" /></label>
+              <label class="field"><span>새 비밀번호 *</span><input id="new-admin-password" type="password" inputmode="numeric" minlength="4" autocomplete="new-password" /></label>
+              <label class="field"><span>새 비밀번호 확인 *</span><input id="confirm-admin-password" type="password" inputmode="numeric" minlength="4" autocomplete="new-password" /></label>
+              <button class="button secondary wide" id="change-admin-password" type="button">비밀번호 변경</button>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view="access">
+          <div class="page-heading">
+            <span class="eyebrow">ACCESS & PRIVACY</span>
+            <h1>권한과 개인정보 보호</h1>
+            <p>모든 자료는 공개 인터넷이 아닌 승인된 공동체 안에서만 나눕니다.</p>
+          </div>
+          <div class="access-grid">
+            <article class="access-card"><span>01</span><h2>교인</h2><p>승인된 공개 범위의 자료를 읽고 파일을 내려받을 수 있습니다.</p><ul><li>자료 열람</li><li>파일 다운로드</li><li>외부 공유 금지</li></ul></article>
+            <article class="access-card accent"><span>02</span><h2>진행자</h2><p>교인 권한에 더해 검토가 끝난 묵상 자료를 등록할 수 있습니다.</p><ul><li>자료 등록</li><li>본인이 올린 자료 삭제</li><li>공개 대상 지정</li></ul></article>
+            <article class="access-card"><span>03</span><h2>관리자</h2><p>구성원 승인, 권한 부여, 모든 자료와 그룹을 관리합니다.</p><ul><li>가입 승인</li><li>진행자 권한 부여</li><li>자료 전체 관리</li></ul></article>
+          </div>
+          <div class="production-notice">
+            <strong>현재는 기능 확인용 프로토타입입니다.</strong>
+            <p>실제 운영에서는 개인별 로그인, 서버 데이터베이스, 암호화된 파일 저장소, 그룹별 접근 정책을 연결해야 합니다. 현재의 이름 기반 입장은 화면 기능을 확인하기 위한 방식입니다.</p>
+          </div>
+        </section>
+      </main>
+
+      <button class="back-to-top" id="back-to-top" type="button" aria-label="페이지 맨 위로 이동" hidden>
+        <span aria-hidden="true">↑</span>
+        맨 위로
+      </button>
+    </div>
+
+    <dialog class="admin-password-dialog" id="admin-password-dialog">
+      <form class="admin-password-card" id="admin-access-form">
+        <span class="eyebrow">ADMIN ACCESS</span>
+        <h2>관리자 비밀번호</h2>
+        <p>관리자 기능을 사용하려면 비밀번호를 입력해주세요.</p>
+        <label class="field"><span>비밀번호</span><input id="admin-access-password" type="password" inputmode="numeric" autocomplete="current-password" required autofocus /></label>
+        <small class="password-error" id="admin-password-error" role="alert"></small>
+        <div class="dialog-actions">
+          <button class="button secondary" id="close-admin-dialog" type="button">취소</button>
+          <button class="button primary" type="submit">입장하기</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="admin-password-dialog" id="delete-record-dialog">
+      <form class="admin-password-card" id="delete-record-form">
+        <h2>자료를 삭제할까요?</h2>
+        <p>삭제한 자료와 첨부 파일은 다시 복구할 수 없습니다.</p>
+        <div class="dialog-actions">
+          <button class="button secondary" id="cancel-record-delete" type="button">취소</button>
+          <button class="button danger" type="submit">삭제하기</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js?v=20260814-37"></script>
+  </body>
+</html>
