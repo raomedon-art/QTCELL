@@ -1341,7 +1341,9 @@ uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!hasUploadPermission()) return;
   const data = new FormData(uploadForm);
-  const file = fileInput.files[0];
+  // Attachments are always optional. The record is saved from its meditation
+  // range or editor content even when no file has been selected.
+  const file = fileInput.files[0] || null;
   if (file && !validateUpload(file)) return;
 
   const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
@@ -1349,7 +1351,7 @@ uploadForm.addEventListener("submit", async (event) => {
   const passage = String(data.get("passage") || "").trim();
   const summaryText = richEditor.innerText.trim();
   const hasVisualContent = Boolean(richEditor.querySelector("img, table, svg"));
-  if (!passage && !summaryText && !hasVisualContent && !file) {
+  if (!passage && !summaryText && !hasVisualContent) {
     showToast("나눔범위나 본문 내용을 입력해주세요.");
     richEditor.focus();
     return;
