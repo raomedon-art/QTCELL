@@ -6,6 +6,19 @@ const KEYS = {
   adminPassword: "malsseumgyeol.private.admin-password.v1",
 };
 
+const CLOUD_CONFIG = window.QTCELL_CLOUD || {};
+const CLOUD_TABLES = { records: "qtcell_records", members: "qtcell_members" };
+const cloudEnabled = Boolean(
+  window.supabase?.createClient
+  && /^https:\/\/.+\.supabase\.co$/i.test(String(CLOUD_CONFIG.supabaseUrl || "").trim())
+  && String(CLOUD_CONFIG.supabaseAnonKey || "").trim()
+);
+const cloudClient = cloudEnabled
+  ? window.supabase.createClient(CLOUD_CONFIG.supabaseUrl.trim(), CLOUD_CONFIG.supabaseAnonKey.trim())
+  : null;
+const cloudBucket = String(CLOUD_CONFIG.bucket || "qtcell-files");
+const cloudMigrationKey = `${KEYS.records}.migrated:${String(CLOUD_CONFIG.supabaseUrl || "local")}`;
+
 const DEFAULT_MEMBERS = [
   { id: "member-kim-gyeongrae", name: "김경래", role: "admin", createdAt: "2026-08-14T00:00:00.000Z" },
 ];
@@ -55,10 +68,14 @@ const adminAccessForm = document.querySelector("#admin-access-form");
 const adminAccessPassword = document.querySelector("#admin-access-password");
 const adminPasswordError = document.querySelector("#admin-password-error");
 const backToTopButton = document.querySelector("#back-to-top");
+const cloudSyncStatus = document.querySelector("#cloud-sync-status");
+const migrateCloudDataButton = document.querySelector("#migrate-cloud-data");
 
 let session = readJson(sessionStorage, KEYS.session, null);
-let records = readJson(localStorage, KEYS.records, []);
-let members = readJson(localStorage, KEYS.members, DEFAULT_MEMBERS);
+const localRecordsAtStartup = readJson(localStorage, KEYS.records, []);
+const localMembersAtStartup = readJson(localStorage, KEYS.members, DEFAULT_MEMBERS);
+let records = Array.isArray(localRecordsAtStartup) ? [...localRecordsAtStartup] : [];
+let members = Array.isArray(localMembersAtStartup) ? [...localMembersAtStartup] : [...DEFAULT_MEMBERS];
 let toastTimer;
 let adminUnlocked = false;
 let protectedViewTarget = "admin";
@@ -222,7 +239,7 @@ function openDatabase() {
   });
 }
 
-async function saveFile(id, file, contentHtml = "") {
+async function saveLocalAsset(id, file, contentHtml = "") {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const transaction = database.transaction("files", "readwrite");
@@ -232,7 +249,7 @@ async function saveFile(id, file, contentHtml = "") {
   });
 }
 
-async function getRecordAsset(id) {
+async function getLocalRecordAsset(id) {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const request = database.transaction("files", "readonly").objectStore("files").get(id);
@@ -241,12 +258,12 @@ async function getRecordAsset(id) {
   });
 }
 
-async function getFile(id) {
-  const asset = await getRecordAsset(id);
+async function getLocalFile(id) {
+  const asset = await getLocalRecordAsset(id);
   return asset?.file || null;
 }
 
-async function removeFile(id) {
+async function removeLocalAsset(id) {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const transaction = database.transaction("files", "readwrite");
@@ -254,6 +271,206 @@ async function removeFile(id) {
     transaction.oncomplete = () => { database.close(); resolve(); };
     transaction.onerror = () => { database.close(); reject(transaction.error); };
   });
+}
+
+function cloudRecordFromRow(row) {
+  return {
+    id: row.id,
+    title: row.title || "",
+    meetingDate: row.meeting_date || "",
+    speaker: row.speaker || "",
+    passage: row.passage || "",
+    visibility: row.visibility || "church",
+    summary: row.summary || "",
+    contentHtml: row.content_html || "",
+    fileName: row.file_name || "",
+    fileType: row.file_type || "",
+    fileSize: Number(row.file_size) || 0,
+    filePath: row.file_path || "",
+    owner: row.owner || "",
+    createdAt: row.created_at,
+    viewCount: Math.max(0, Number(row.view_count) || 0),
+  };
+}
+
+function cloudRecordToRow(record, contentHtml = record.contentHtml || "") {
+  return {
+    id: record.id,
+    title: record.title || "",
+    meeting_date: record.meetingDate || null,
+    speaker: record.speaker || "",
+    passage: record.passage || "",
+    visibility: record.visibility || "church",
+    summary: record.summary || "",
+    content_html: contentHtml || "",
+    file_name: record.fileName || null,
+    file_type: record.fileType || null,
+    file_size: Number(record.fileSize) || null,
+    file_path: record.filePath || null,
+    owner: record.owner || "",
+    created_at: record.createdAt || new Date().toISOString(),
+    view_count: Math.max(0, Number(record.viewCount) || 0),
+  };
+}
+
+function cloudMemberFromRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role === "admin" ? "admin" : "member",
+    createdAt: row.created_at,
+  };
+}
+
+function cloudMemberToRow(member) {
+  return {
+    id: member.id,
+    name: member.name,
+    role: member.role === "admin" ? "admin" : "member",
+    created_at: member.createdAt || new Date().toISOString(),
+  };
+}
+
+function cloudFilePath(recordId, filename = "") {
+  const extension = filename.includes(".")
+    ? filename.split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 10)
+    : "";
+  return `${recordId}/attachment${extension ? `.${extension}` : ""}`;
+}
+
+function updateCloudSyncPanel(message = "") {
+  if (!cloudSyncStatus || !migrateCloudDataButton) return;
+  if (!cloudEnabled) {
+    cloudSyncStatus.textContent = "현재 브라우저에만 저장됩니다. cloud-config.js를 설정하면 여러 기기에서 함께 볼 수 있습니다.";
+    migrateCloudDataButton.hidden = true;
+    return;
+  }
+  cloudSyncStatus.textContent = message || "공유 저장소에 연결되었습니다. 새 자료는 모든 기기에 동기화됩니다.";
+  const migrationDone = localStorage.getItem(cloudMigrationKey) === "done";
+  migrateCloudDataButton.hidden = migrationDone || (!localRecordsAtStartup.length && !localMembersAtStartup.length);
+}
+
+async function loadCloudState() {
+  const [recordResult, memberResult] = await Promise.all([
+    cloudClient.from(CLOUD_TABLES.records).select("*").order("created_at", { ascending: false }),
+    cloudClient.from(CLOUD_TABLES.members).select("*").order("created_at", { ascending: true }),
+  ]);
+  if (recordResult.error) throw recordResult.error;
+  if (memberResult.error) throw memberResult.error;
+  records = (recordResult.data || []).map(cloudRecordFromRow);
+  members = (memberResult.data || []).map(cloudMemberFromRow);
+  if (!members.length) members = [...DEFAULT_MEMBERS];
+}
+
+async function saveCloudRecord(record, file, contentHtml = "") {
+  const previousPath = record.filePath || "";
+  let nextPath = previousPath;
+  if (file) {
+    nextPath = cloudFilePath(record.id, file.name);
+    const uploadResult = await cloudClient.storage.from(cloudBucket).upload(nextPath, file, {
+      cacheControl: "3600",
+      contentType: file.type || undefined,
+      upsert: true,
+    });
+    if (uploadResult.error) throw uploadResult.error;
+  }
+
+  const nextRecord = { ...record, contentHtml, filePath: nextPath };
+  const saveResult = await cloudClient.from(CLOUD_TABLES.records).upsert(cloudRecordToRow(nextRecord, contentHtml));
+  if (saveResult.error) throw saveResult.error;
+  Object.assign(record, nextRecord);
+
+  if (file && previousPath && previousPath !== nextPath) {
+    await cloudClient.storage.from(cloudBucket).remove([previousPath]);
+  }
+}
+
+async function saveRecordData(record, file, contentHtml = "", { isNew = false } = {}) {
+  if (cloudEnabled) {
+    await saveCloudRecord(record, file, contentHtml);
+  } else {
+    await saveLocalAsset(record.id, file, contentHtml);
+  }
+  if (isNew && !records.some((item) => item.id === record.id)) records.unshift(record);
+  if (!cloudEnabled) writeJson(localStorage, KEYS.records, records);
+}
+
+async function getRecordAsset(id) {
+  if (!cloudEnabled) return getLocalRecordAsset(id);
+  const record = records.find((item) => item.id === id);
+  return record ? { id, file: null, contentHtml: record.contentHtml || "" } : null;
+}
+
+async function getFile(id) {
+  if (!cloudEnabled) return getLocalFile(id);
+  const record = records.find((item) => item.id === id);
+  if (!record?.filePath) return null;
+  const downloadResult = await cloudClient.storage.from(cloudBucket).download(record.filePath);
+  if (downloadResult.error) throw downloadResult.error;
+  return new File([downloadResult.data], record.fileName || "묵상-자료", { type: record.fileType || downloadResult.data.type });
+}
+
+async function removeRecordData(record) {
+  if (!cloudEnabled) {
+    await removeLocalAsset(record.id);
+    records = records.filter((item) => item.id !== record.id);
+    writeJson(localStorage, KEYS.records, records);
+    return;
+  }
+  const deleteResult = await cloudClient.from(CLOUD_TABLES.records).delete().eq("id", record.id);
+  if (deleteResult.error) throw deleteResult.error;
+  records = records.filter((item) => item.id !== record.id);
+  if (record.filePath) await cloudClient.storage.from(cloudBucket).remove([record.filePath]);
+}
+
+async function persistViewCount(record) {
+  if (!cloudEnabled) {
+    writeJson(localStorage, KEYS.records, records);
+    return;
+  }
+  const result = await cloudClient.rpc("increment_qtcell_view_count", { p_record_id: record.id });
+  if (result.error) throw result.error;
+  if (Number.isFinite(Number(result.data))) record.viewCount = Number(result.data);
+}
+
+async function addMemberData(member) {
+  if (cloudEnabled) {
+    const result = await cloudClient.from(CLOUD_TABLES.members).insert(cloudMemberToRow(member));
+    if (result.error) throw result.error;
+  }
+  members.push(member);
+  if (!cloudEnabled) writeJson(localStorage, KEYS.members, members);
+}
+
+async function migrateLocalDataToCloud() {
+  if (!cloudEnabled) return;
+  migrateCloudDataButton.disabled = true;
+  updateCloudSyncPanel("기존 자료와 첨부 파일을 공유 저장소로 옮기는 중입니다…");
+  try {
+    if (localMembersAtStartup.length) {
+      const memberResult = await cloudClient
+        .from(CLOUD_TABLES.members)
+        .upsert(localMembersAtStartup.map(cloudMemberToRow), { onConflict: "name" });
+      if (memberResult.error) throw memberResult.error;
+    }
+    for (const localRecord of localRecordsAtStartup) {
+      const asset = await getLocalRecordAsset(localRecord.id);
+      await saveCloudRecord({ ...localRecord }, asset?.file || null, asset?.contentHtml || "");
+    }
+    await loadCloudState();
+    renderRecords();
+    renderMembers();
+    localStorage.setItem(cloudMigrationKey, "done");
+    migrateCloudDataButton.hidden = true;
+    updateCloudSyncPanel("이 브라우저의 기존 자료까지 공유 저장소로 옮겼습니다.");
+    showToast("기존 자료를 공유 저장소로 옮겼습니다.");
+  } catch (error) {
+    console.error("Cloud migration failed", error);
+    updateCloudSyncPanel("자료 이전에 실패했습니다. Supabase 설정과 정책을 확인해주세요.");
+    showToast("자료 이전에 실패했습니다. 설정을 확인해주세요.");
+  } finally {
+    migrateCloudDataButton.disabled = false;
+  }
 }
 
 function fileExtension(filename) {
@@ -340,7 +557,11 @@ async function openRecordDetail(recordId, { countView = true } = {}) {
   if (!record) return;
   if (countView) {
     record.viewCount = Math.max(0, Number(record.viewCount) || 0) + 1;
-    writeJson(localStorage, KEYS.records, records);
+    try {
+      await persistViewCount(record);
+    } catch (error) {
+      console.error("View count sync failed", error);
+    }
     renderRecords();
   }
   currentDetailRecordId = record.id;
@@ -530,7 +751,7 @@ loginForm.addEventListener("submit", (event) => {
   login(registeredMember.name, registeredMember.role);
 });
 
-memberForm.addEventListener("submit", (event) => {
+memberForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!hasUploadPermission()) return;
   const data = new FormData(memberForm);
@@ -540,16 +761,21 @@ memberForm.addEventListener("submit", (event) => {
     showToast("이미 등록된 멤버입니다.");
     return;
   }
-  members.push({
+  const member = {
     id: crypto.randomUUID ? crypto.randomUUID() : `member-${Date.now()}`,
     name,
     role: role === "admin" ? "admin" : "member",
     createdAt: new Date().toISOString(),
-  });
-  writeJson(localStorage, KEYS.members, members);
-  memberForm.reset();
-  renderMembers();
-  showToast(`${name}님을 새 멤버로 등록했습니다.`);
+  };
+  try {
+    await addMemberData(member);
+    memberForm.reset();
+    renderMembers();
+    showToast(`${name}님을 새 멤버로 등록했습니다.`);
+  } catch (error) {
+    console.error("Member save failed", error);
+    showToast("멤버를 등록하지 못했습니다. 다시 시도해주세요.");
+  }
 });
 
 document.querySelectorAll(".protected-view-trigger").forEach((button) => {
@@ -677,10 +903,10 @@ deleteRecordForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!pendingDeleteRecordId || !hasUploadPermission()) return;
   const recordId = pendingDeleteRecordId;
+  const record = records.find((item) => item.id === recordId);
+  if (!record) return;
   try {
-    await removeFile(recordId);
-    records = records.filter((record) => record.id !== recordId);
-    writeJson(localStorage, KEYS.records, records);
+    await removeRecordData(record);
     pendingDeleteRecordId = null;
     currentDetailRecordId = null;
     deleteRecordDialog.close();
@@ -709,7 +935,6 @@ detailEditForm.addEventListener("submit", async (event) => {
   const contentHtml = sanitizeEditorHtml(detailRichEditor.innerHTML);
   try {
     const existingAsset = await getRecordAsset(record.id);
-    await saveFile(record.id, replacementFile || existingAsset?.file || null, contentHtml);
     record.meetingDate = meetingDate;
     record.passage = passage;
     record.title = `${passage || "묵상 나눔"} · ${formatDate(meetingDate)}`;
@@ -719,7 +944,7 @@ detailEditForm.addEventListener("submit", async (event) => {
       record.fileType = replacementFile.type;
       record.fileSize = replacementFile.size;
     }
-    writeJson(localStorage, KEYS.records, records);
+    await saveRecordData(record, replacementFile || existingAsset?.file || null, contentHtml);
     renderRecords();
     await openRecordDetail(record.id, { countView: false });
     showToast("수정 내용을 저장했습니다.");
@@ -781,9 +1006,7 @@ uploadForm.addEventListener("submit", async (event) => {
   };
 
   try {
-    await saveFile(id, file, contentHtml);
-    records.unshift(record);
-    writeJson(localStorage, KEYS.records, records);
+    await saveRecordData(record, file, contentHtml, { isNew: true });
     uploadForm.reset();
     richEditor.innerHTML = "";
     uploadForm.elements.meetingDate.value = localDateValue();
@@ -809,6 +1032,34 @@ recordList.addEventListener("keydown", (event) => {
   openRecordDetail(card.dataset.recordId);
 });
 
-uploadForm.elements.meetingDate.value = localDateValue();
-restoreRememberedName();
-if (session) enterApp();
+migrateCloudDataButton.addEventListener("click", migrateLocalDataToCloud);
+
+window.addEventListener("focus", async () => {
+  if (!cloudEnabled || !session || document.visibilityState !== "visible") return;
+  try {
+    await loadCloudState();
+    renderRecords();
+    renderMembers();
+  } catch (error) {
+    console.error("Cloud refresh failed", error);
+  }
+});
+
+async function initializeApp() {
+  uploadForm.elements.meetingDate.value = localDateValue();
+  updateCloudSyncPanel();
+  if (cloudEnabled) {
+    try {
+      await loadCloudState();
+      updateCloudSyncPanel();
+    } catch (error) {
+      console.error("Cloud initialization failed", error);
+      updateCloudSyncPanel("공유 저장소에 연결하지 못했습니다. cloud-config.js와 Supabase SQL 설정을 확인해주세요.");
+      showToast("공유 저장소 연결에 실패해 자료를 불러오지 못했습니다.");
+    }
+  }
+  restoreRememberedName();
+  if (session) enterApp();
+}
+
+initializeApp();
