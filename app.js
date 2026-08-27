@@ -357,7 +357,7 @@ function enterApp() {
   document.querySelector("#user-name").textContent = session.name;
   document.querySelector("#user-initial").textContent = session.name.slice(0, 1);
   applyRoleVisibility();
-  switchView("library");
+  switchView("library", { historyMode: "replace" });
   renderRecords();
   renderMembers();
 }
@@ -386,7 +386,7 @@ function restoreRememberedName() {
   loginForm.elements.rememberName.checked = Boolean(rememberedName);
 }
 
-function switchView(viewName) {
+function switchView(viewName, { historyMode = "push", fromHistory = false } = {}) {
   if (viewName === "upload" && !hasUploadPermission()) {
     showToast("자료 등록은 관리자만 할 수 있어요.");
     viewName = "library";
@@ -395,7 +395,7 @@ function switchView(viewName) {
     showToast("관리자만 이용할 수 있는 페이지입니다.");
     viewName = "library";
   }
-  if (["admin", "upload"].includes(viewName) && !adminUnlocked) return;
+  if (["admin", "upload"].includes(viewName) && !adminUnlocked && !fromHistory) return;
   if (!["admin", "upload"].includes(viewName)) adminUnlocked = false;
   document.querySelectorAll("[data-view]").forEach((view) => {
     view.classList.toggle("is-active", view.dataset.view === viewName);
@@ -403,8 +403,20 @@ function switchView(viewName) {
   document.querySelectorAll("[data-view-link]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.viewLink === viewName);
   });
-  history.replaceState(null, "", `#${viewName}`);
+  const nextHash = `#${viewName}`;
+  if (historyMode === "replace") history.replaceState({ view: viewName }, "", nextHash);
+  else if (historyMode === "push" && window.location.hash !== nextHash) history.pushState({ view: viewName }, "", nextHash);
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function restoreViewFromHistory() {
+  if (!session) return;
+  const requestedView = window.location.hash.replace(/^#/, "") || "library";
+  const allowedViews = new Set(["library", "detail", "upload", "admin"]);
+  let viewName = allowedViews.has(requestedView) ? requestedView : "library";
+  if (viewName === "detail" && !currentDetailRecordId) viewName = "library";
+  if (["upload", "admin"].includes(viewName) && !hasUploadPermission()) viewName = "library";
+  switchView(viewName, { historyMode: "none", fromHistory: true });
 }
 
 function openDatabase() {
@@ -1238,6 +1250,8 @@ document.querySelectorAll("[data-view-link]").forEach((button) => {
   });
 });
 
+window.addEventListener("popstate", restoreViewFromHistory);
+
 document.querySelector("#logout-button").addEventListener("click", leaveApp);
 searchInput.addEventListener("input", () => {
   currentRecordPage = 1;
@@ -1322,7 +1336,7 @@ deleteRecordForm.addEventListener("submit", async (event) => {
     currentDetailRecordId = null;
     deleteRecordDialog.close();
     renderRecords();
-    switchView("library");
+    switchView("library", { historyMode: "replace" });
     setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
     showToast("자료를 삭제했습니다.");
   } catch (error) {
