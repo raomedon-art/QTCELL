@@ -113,25 +113,90 @@ function escapeHtml(value = "") {
 function sanitizeEditorHtml(html = "") {
   const template = document.createElement("template");
   template.innerHTML = String(html);
-  template.content.querySelectorAll("script, style, iframe, object, embed, link, meta").forEach((element) => element.remove());
-  const allowedTags = new Set(["P", "DIV", "BR", "STRONG", "B", "I", "EM", "U", "S", "UL", "OL", "LI", "BLOCKQUOTE", "H2", "H3", "H4", "IMG", "A", "SPAN", "FONT"]);
+  template.content.querySelectorAll("script, style, iframe, object, embed, link, meta, form, input, button, textarea, select, video, audio").forEach((element) => element.remove());
+  const commentWalker = document.createTreeWalker(template.content, NodeFilter.SHOW_COMMENT);
+  const comments = [];
+  while (commentWalker.nextNode()) comments.push(commentWalker.currentNode);
+  comments.forEach((comment) => comment.remove());
+
+  const allowedTags = new Set([
+    "P", "DIV", "BR", "STRONG", "B", "I", "EM", "U", "S", "UL", "OL", "LI", "BLOCKQUOTE",
+    "H1", "H2", "H3", "H4", "H5", "H6", "IMG", "A", "SPAN", "FONT", "HR", "FIGURE", "FIGCAPTION",
+    "TABLE", "THEAD", "TBODY", "TFOOT", "TR", "TH", "TD", "CAPTION", "COLGROUP", "COL",
+    "SVG", "G", "PATH", "RECT", "CIRCLE", "ELLIPSE", "LINE", "POLYLINE", "POLYGON", "TEXT", "TSPAN",
+  ]);
+  const styleProperties = [
+    "color", "background-color", "font-family", "font-size", "font-weight", "font-style", "line-height",
+    "letter-spacing", "text-align", "text-decoration", "vertical-align", "white-space", "list-style-type",
+    "border", "border-top", "border-right", "border-bottom", "border-left", "border-color", "border-style",
+    "border-width", "border-collapse", "border-spacing", "border-radius", "padding", "padding-top", "padding-right",
+    "padding-bottom", "padding-left", "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "width", "min-width", "max-width", "height", "min-height", "max-height", "object-fit", "float",
+  ];
+  const tagAttributes = {
+    A: new Set(["href", "target", "title"]),
+    IMG: new Set(["src", "alt", "width", "height", "title"]),
+    TABLE: new Set(["width", "height", "cellpadding", "cellspacing"]),
+    TD: new Set(["colspan", "rowspan", "scope", "width", "height"]),
+    TH: new Set(["colspan", "rowspan", "scope", "width", "height"]),
+    COL: new Set(["span", "width"]),
+    OL: new Set(["start", "type"]),
+    LI: new Set(["value"]),
+    FONT: new Set(["face", "size", "color"]),
+    SVG: new Set(["viewbox", "width", "height", "xmlns", "fill", "stroke"]),
+    G: new Set(["fill", "stroke", "stroke-width", "transform", "opacity"]),
+    PATH: new Set(["d", "fill", "stroke", "stroke-width", "transform", "opacity"]),
+    RECT: new Set(["x", "y", "width", "height", "rx", "ry", "fill", "stroke", "stroke-width", "transform", "opacity"]),
+    CIRCLE: new Set(["cx", "cy", "r", "fill", "stroke", "stroke-width", "transform", "opacity"]),
+    ELLIPSE: new Set(["cx", "cy", "rx", "ry", "fill", "stroke", "stroke-width", "transform", "opacity"]),
+    LINE: new Set(["x1", "y1", "x2", "y2", "stroke", "stroke-width", "transform", "opacity"]),
+    POLYLINE: new Set(["points", "fill", "stroke", "stroke-width", "transform", "opacity"]),
+    POLYGON: new Set(["points", "fill", "stroke", "stroke-width", "transform", "opacity"]),
+    TEXT: new Set(["x", "y", "dx", "dy", "fill", "stroke", "font-size", "font-family", "text-anchor", "transform", "opacity"]),
+    TSPAN: new Set(["x", "y", "dx", "dy", "fill", "font-size", "font-family", "text-anchor"]),
+  };
   [...template.content.querySelectorAll("*")].forEach((element) => {
-    if (!allowedTags.has(element.tagName)) {
+    const tagName = element.tagName.toUpperCase();
+    if (!allowedTags.has(tagName)) {
       element.replaceWith(...element.childNodes);
       return;
     }
-    const textAlign = element.style.textAlign;
-    [...element.attributes].forEach((attribute) => {
-      if (!["src", "alt", "href", "target", "face", "size", "color"].includes(attribute.name)) element.removeAttribute(attribute.name);
+    const safeStyles = styleProperties.flatMap((property) => {
+      const value = element.style.getPropertyValue(property).trim();
+      if (!value || /(?:javascript:|expression\s*\(|url\s*\()/i.test(value) || !CSS.supports(property, value)) return [];
+      return [[property, value, element.style.getPropertyPriority(property)]];
     });
-    if (["left", "center", "right", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
-    if (element.tagName === "IMG" && !/^(data:image\/|https?:\/\/)/i.test(element.getAttribute("src") || "")) element.remove();
-    if (element.tagName === "A" && !/^(https?:\/\/|mailto:)/i.test(element.getAttribute("href") || "")) element.removeAttribute("href");
-    if (element.tagName === "FONT") {
-      const allowedFonts = new Set(["Pretendard", "Georgia", "Gungsuh"]);
-      if (!allowedFonts.has(element.getAttribute("face") || "")) element.removeAttribute("face");
+    const allowedAttributes = tagAttributes[tagName] || new Set();
+    [...element.attributes].forEach((attribute) => {
+      if (!allowedAttributes.has(attribute.name.toLowerCase())) element.removeAttribute(attribute.name);
+    });
+    element.removeAttribute("style");
+    safeStyles.forEach(([property, value, priority]) => element.style.setProperty(property, value, priority));
+
+    if (["TD", "TH"].includes(tagName)) {
+      ["colspan", "rowspan"].forEach((attribute) => {
+        const value = element.getAttribute(attribute);
+        if (value && (!/^\d{1,3}$/.test(value) || Number(value) < 1)) element.removeAttribute(attribute);
+      });
+    }
+    if (tagName === "IMG") {
+      const src = element.getAttribute("src") || "";
+      const isSafeImage = /^(?:https?:\/\/|data:image\/(?:png|jpe?g|gif|webp|bmp|svg\+xml|avif);base64,)/i.test(src);
+      if (!isSafeImage || src.length > 36 * 1024 * 1024) element.remove();
+    }
+    if (tagName === "A") {
+      if (!/^(https?:\/\/|mailto:)/i.test(element.getAttribute("href") || "")) element.removeAttribute("href");
+      if (!["_blank", "_self"].includes(element.getAttribute("target") || "")) element.removeAttribute("target");
+      if (element.getAttribute("target") === "_blank") element.setAttribute("rel", "noopener noreferrer");
+    }
+    if (tagName === "FONT") {
       if (!/^[1-7]$/.test(element.getAttribute("size") || "")) element.removeAttribute("size");
       if (!CSS.supports("color", element.getAttribute("color") || "")) element.removeAttribute("color");
+    }
+    if (["SVG", "G", "PATH", "RECT", "CIRCLE", "ELLIPSE", "LINE", "POLYLINE", "POLYGON", "TEXT", "TSPAN"].includes(tagName)) {
+      [...element.attributes].forEach((attribute) => {
+        if (/(?:javascript:|data:|https?:|url\s*\()/i.test(attribute.value)) element.removeAttribute(attribute.name);
+      });
     }
   });
   return template.innerHTML;
@@ -686,6 +751,48 @@ async function insertImagesIntoEditor(files, editor = activeEditor) {
   rememberEditorSelection(editor);
 }
 
+function plainTextToEditorHtml(text = "") {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => `<p>${line ? escapeHtml(line) : "<br>"}</p>`)
+    .join("");
+}
+
+function insertHtmlIntoEditor(html, editor = activeEditor) {
+  if (!html) return;
+  restoreEditorSelection(editor);
+  document.execCommand("insertHTML", false, html);
+  rememberEditorSelection(editor);
+}
+
+function clipboardImages(clipboardData) {
+  const itemFiles = [...(clipboardData?.items || [])]
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (itemFiles.length) return itemFiles;
+  return [...(clipboardData?.files || [])].filter((file) => file.type.startsWith("image/"));
+}
+
+async function handleEditorPaste(event, editor) {
+  const clipboardData = event.clipboardData;
+  if (!clipboardData) return;
+  const sourceHtml = clipboardData.getData("text/html");
+  const sourceText = clipboardData.getData("text/plain");
+  const pastedImages = clipboardImages(clipboardData);
+  if (!sourceHtml && !pastedImages.length) return;
+
+  event.preventDefault();
+  const safeHtml = sourceHtml ? sanitizeEditorHtml(sourceHtml) : plainTextToEditorHtml(sourceText);
+  if (safeHtml) insertHtmlIntoEditor(safeHtml, editor);
+
+  const htmlAlreadyContainsVisual = /<(?:img|svg)\b/i.test(safeHtml);
+  if (pastedImages.length && !htmlAlreadyContainsVisual) await insertImagesIntoEditor(pastedImages, editor);
+  if (/<table\b/i.test(safeHtml) || htmlAlreadyContainsVisual || pastedImages.length) {
+    showToast("표와 이미지 형식을 유지해 붙여넣었습니다.");
+  }
+}
+
 function setupRichEditor(editor, toolbar, imageInput, insertImageButton) {
   ["keyup", "mouseup", "input"].forEach((eventName) => {
     editor.addEventListener(eventName, () => rememberEditorSelection(editor));
@@ -724,12 +831,7 @@ function setupRichEditor(editor, toolbar, imageInput, insertImageButton) {
     await insertImagesIntoEditor(imageInput.files, editor);
     imageInput.value = "";
   });
-  editor.addEventListener("paste", async (event) => {
-    const pastedImages = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
-    if (!pastedImages.length) return;
-    event.preventDefault();
-    await insertImagesIntoEditor(pastedImages, editor);
-  });
+  editor.addEventListener("paste", (event) => handleEditorPaste(event, editor));
 }
 
 function localDateValue(date = new Date()) {
