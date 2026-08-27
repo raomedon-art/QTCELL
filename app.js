@@ -56,7 +56,6 @@ const sortOrder = document.querySelector("#sort-order");
 const resultCount = document.querySelector("#result-count");
 const toast = document.querySelector("#toast");
 const fileInput = document.querySelector("#file-input");
-const submitWithoutFileButton = document.querySelector("#submit-without-file");
 const selectedFile = document.querySelector("#selected-file");
 const dropZone = document.querySelector("#drop-zone");
 const richEditor = document.querySelector("#rich-editor");
@@ -754,7 +753,7 @@ function recordCard(record, sequenceNumber) {
   const newBadge = isNewRecord(record) ? `<span class="record-new-badge">NEW</span>` : "";
   return `
     <article class="record-card" data-record-id="${escapeHtml(record.id)}" role="button" tabindex="0" aria-label="${escapeHtml(formatMeditationRange(record))} 상세 보기">
-      <div class="record-cell record-index" data-label="구분">${String(sequenceNumber).padStart(2, "0")}</div>
+      <div class="record-cell record-index" data-label="구분">${String(sequenceNumber)}</div>
       <div class="record-cell record-date" data-label="올린 날짜">${escapeHtml(formatUploadedDate(record))}</div>
       <div class="record-cell record-passage" data-label="묵상일시 및 범위">${escapeHtml(formatMeditationRange(record))}</div>
       <div class="record-cell record-owner" data-label="등록자">${escapeHtml(record.owner || "관리자")}</div>
@@ -1335,12 +1334,6 @@ fileInput.addEventListener("change", () => {
 // marking the attachment as required. This field must always remain optional.
 fileInput.required = false;
 fileInput.removeAttribute("required");
-
-submitWithoutFileButton.addEventListener("click", () => {
-  fileInput.value = "";
-  showSelectedFile(null);
-  uploadForm.requestSubmit();
-});
 
 ["dragenter", "dragover"].forEach((eventName) => {
   dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.add("is-dragging"); });
