@@ -56,6 +56,7 @@ const sortOrder = document.querySelector("#sort-order");
 const resultCount = document.querySelector("#result-count");
 const toast = document.querySelector("#toast");
 const fileInput = document.querySelector("#file-input");
+const chooseFileButton = document.querySelector("#choose-file-button");
 const selectedFile = document.querySelector("#selected-file");
 const dropZone = document.querySelector("#drop-zone");
 const richEditor = document.querySelector("#rich-editor");
@@ -1334,6 +1335,8 @@ fileInput.addEventListener("change", () => {
 // marking the attachment as required. This field must always remain optional.
 fileInput.required = false;
 fileInput.removeAttribute("required");
+
+chooseFileButton.addEventListener("click", () => fileInput.click());
 
 ["dragenter", "dragover"].forEach((eventName) => {
   dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.add("is-dragging"); });

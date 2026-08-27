@@ -631,9 +631,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .rich-editor:empty::before { color: #949c98; content: attr(data-placeholder); pointer-events: none; }
 .rich-editor img { display: block; width: auto; max-width: 100%; height: auto; margin: 18px auto; border-radius: 12px; box-shadow: 0 8px 24px rgba(28, 55, 44, .12); }
 .rich-editor p, .rich-editor div { margin: 0 0 10px; }
-.drop-zone { display: grid; min-height: 220px; place-items: center; align-content: center; padding: 30px; border: 1.5px dashed #b9c5bc; border-radius: 16px; background: var(--sage-2); text-align: center; cursor: pointer; }
+.drop-zone { display: grid; min-height: 220px; place-items: center; align-content: center; padding: 30px; border: 1.5px dashed #b9c5bc; border-radius: 16px; background: var(--sage-2); text-align: center; }
 .drop-zone.is-dragging { border-color: var(--green); background: var(--sage); }
-.drop-zone input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop-zone-picker { display: grid; width: 100%; place-items: center; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.drop-zone-picker:focus-visible { border-radius: 12px; outline: 3px solid rgba(56,100,80,.22); outline-offset: 6px; }
 .upload-icon { display: grid; width: 42px; height: 42px; margin-bottom: 10px; place-items: center; border-radius: 50%; background: var(--green); color: white; font-size: 22px; }
 .drop-zone strong { font-size: 14px; }
 .drop-zone small { color: var(--muted); font-size: 10px; }
