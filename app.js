@@ -471,8 +471,8 @@ function cloudRecordFromRow(row) {
   };
 }
 
-function cloudRecordToRow(record, contentHtml = record.contentHtml || "") {
-  return {
+function cloudRecordToRow(record, contentHtml = record.contentHtml || "", { useServerCreatedAt = false } = {}) {
+  const row = {
     id: record.id,
     title: record.title || "",
     meeting_date: record.meetingDate || null,
@@ -486,9 +486,13 @@ function cloudRecordToRow(record, contentHtml = record.contentHtml || "") {
     file_size: Number(record.fileSize) || null,
     file_path: record.filePath || null,
     owner: record.owner || "",
-    created_at: record.createdAt || new Date().toISOString(),
     view_count: Math.max(0, Number(record.viewCount) || 0),
   };
+  // New shared records use Supabase's server clock. This guarantees that
+  // registration numbers follow the real insertion order even when devices
+  // have different local clocks. Existing/imported records keep their time.
+  if (!useServerCreatedAt) row.created_at = record.createdAt || new Date().toISOString();
+  return row;
 }
 
 function cloudMemberFromRow(row) {
@@ -545,7 +549,7 @@ async function loadCloudState() {
   writeJson(localStorage, KEYS.members, members);
 }
 
-async function saveCloudRecord(record, file, contentHtml = "") {
+async function saveCloudRecord(record, file, contentHtml = "", { isNew = false } = {}) {
   const previousPath = record.filePath || "";
   let nextPath = previousPath;
   if (file) {
@@ -559,9 +563,13 @@ async function saveCloudRecord(record, file, contentHtml = "") {
   }
 
   const nextRecord = { ...record, contentHtml, filePath: nextPath };
-  const saveResult = await cloudClient.from(CLOUD_TABLES.records).upsert(cloudRecordToRow(nextRecord, contentHtml));
+  const saveResult = await cloudClient
+    .from(CLOUD_TABLES.records)
+    .upsert(cloudRecordToRow(nextRecord, contentHtml, { useServerCreatedAt: isNew }))
+    .select("*")
+    .single();
   if (saveResult.error) throw saveResult.error;
-  Object.assign(record, nextRecord);
+  Object.assign(record, saveResult.data ? cloudRecordFromRow(saveResult.data) : nextRecord);
 
   if (file && previousPath && previousPath !== nextPath) {
     await cloudClient.storage.from(cloudBucket).remove([previousPath]);
@@ -570,7 +578,7 @@ async function saveCloudRecord(record, file, contentHtml = "") {
 
 async function saveRecordData(record, file, contentHtml = "", { isNew = false } = {}) {
   if (cloudEnabled) {
-    await saveCloudRecord(record, file, contentHtml);
+    await saveCloudRecord(record, file, contentHtml, { isNew });
   } else {
     await saveLocalAsset(record.id, file, contentHtml);
     setRecordContentHtml(record, contentHtml);
