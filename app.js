@@ -1394,6 +1394,7 @@ uploadForm.addEventListener("submit", async (event) => {
     const contentHtml = await prepareEditorHtmlForSave(richEditor);
     await saveRecordData(record, file, contentHtml, { isNew: true });
     uploadForm.reset();
+    fileInput.value = "";
     richEditor.innerHTML = "";
     uploadForm.elements.meetingDate.value = localDateValue();
     showSelectedFile(null);

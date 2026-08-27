@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <meta name="description" content="승인된 교회 구성원만 함께 보는 비공개 묵상 나눔 자료실" />
     <title>묵상셀 · 비공개 묵상 자료실</title>
     <link rel="icon" type="image/png" href="./assets/soyang-church-logo-cutout.png" />
@@ -96,8 +99,8 @@
                 <option value="body">본문 내용</option>
               </select>
               <select id="sort-order" aria-label="자료 정렬 순서">
-                <option value="oldest">등록순</option>
-                <option value="newest">최근 등록순</option>
+                <option value="newest" selected>최근 등록순</option>
+                <option value="oldest">오래된 등록순</option>
               </select>
               <label class="search-box">
                 <span aria-hidden="true">⌕</span>
@@ -220,7 +223,6 @@
             <div class="form-card">
               <div class="form-section-heading"><span>02</span><div><h2>첨부 파일 <small>(선택 사항 · 생략 가능)</small></h2></div></div>
               <div class="drop-zone" id="drop-zone">
-                <input id="file-input" name="file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" aria-label="선택 첨부 파일" aria-describedby="attachment-help" hidden />
                 <button class="drop-zone-picker" id="choose-file-button" type="button">
                   <span class="upload-icon" aria-hidden="true">↑</span>
                   <strong>파일을 선택하거나 여기로 끌어오세요</strong>
@@ -235,6 +237,9 @@
               <button class="button primary" type="submit">등록</button>
             </div>
           </form>
+          <!-- The optional file input deliberately lives outside the form so a
+               form submission can never activate the operating-system picker. -->
+          <input id="file-input" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" aria-label="선택 첨부 파일" aria-describedby="attachment-help" hidden />
         </section>
 
         <section class="view" data-view="admin">
@@ -344,6 +349,6 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="./cloud-config.js?v=20260827-3"></script>
-    <script src="./app.js?v=20260827-13"></script>
+    <script src="./app.js?v=20260827-14"></script>
   </body>
 </html>
