@@ -56,6 +56,7 @@ const sortOrder = document.querySelector("#sort-order");
 const resultCount = document.querySelector("#result-count");
 const toast = document.querySelector("#toast");
 const fileInput = document.querySelector("#file-input");
+const submitWithoutFileButton = document.querySelector("#submit-without-file");
 const selectedFile = document.querySelector("#selected-file");
 const dropZone = document.querySelector("#drop-zone");
 const richEditor = document.querySelector("#rich-editor");
@@ -1320,6 +1321,17 @@ fileInput.addEventListener("change", () => {
   const file = fileInput.files[0];
   if (file && !validateUpload(file)) fileInput.value = "";
   showSelectedFile(fileInput.files[0]);
+});
+
+// Guard against stale markup or restored browser form state accidentally
+// marking the attachment as required. This field must always remain optional.
+fileInput.required = false;
+fileInput.removeAttribute("required");
+
+submitWithoutFileButton.addEventListener("click", () => {
+  fileInput.value = "";
+  showSelectedFile(null);
+  uploadForm.requestSubmit();
 });
 
 ["dragenter", "dragover"].forEach((eventName) => {

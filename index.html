@@ -6,7 +6,7 @@
     <meta name="description" content="승인된 교회 구성원만 함께 보는 비공개 묵상 나눔 자료실" />
     <title>묵상셀 · 비공개 묵상 자료실</title>
     <link rel="icon" type="image/png" href="./assets/soyang-church-logo-cutout.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260827-4" />
+    <link rel="stylesheet" href="./styles.css?v=20260827-5" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">본문 바로가기</a>
@@ -226,6 +226,10 @@
                 <small id="attachment-help">필요할 때만 선택 · PDF, PPT, 한글, Word, TXT, Markdown, 이미지 · 최대 25MB</small>
                 <span class="selected-file" id="selected-file"></span>
               </label>
+              <div class="optional-upload-actions">
+                <span>첨부할 파일이 없다면 이 단계를 건너뛰세요.</span>
+                <button class="button secondary compact" id="submit-without-file" type="button">첨부 없이 바로 등록</button>
+              </div>
             </div>
 
             <div class="form-actions">
@@ -342,6 +346,6 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="./cloud-config.js?v=20260827-3"></script>
-    <script src="./app.js?v=20260827-9"></script>
+    <script src="./app.js?v=20260827-10"></script>
   </body>
 </html>
