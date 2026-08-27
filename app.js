@@ -52,8 +52,9 @@ const uploadForm = document.querySelector("#upload-form");
 const recordList = document.querySelector("#record-list");
 const searchInput = document.querySelector("#search-input");
 const searchScope = document.querySelector("#search-scope");
-const sortOrder = document.querySelector("#sort-order");
 const resultCount = document.querySelector("#result-count");
+const pageSizeSelect = document.querySelector("#page-size");
+const recordPagination = document.querySelector("#record-pagination");
 const toast = document.querySelector("#toast");
 const fileInput = document.querySelector("#file-input");
 const chooseFileButton = document.querySelector("#choose-file-button");
@@ -107,6 +108,7 @@ let currentDetailRecordId = null;
 let pendingDeleteRecordId = null;
 let cloudRefreshPromise = null;
 let uploadFormDirty = false;
+let currentRecordPage = 1;
 
 if (!Array.isArray(members) || !members.length) members = [...DEFAULT_MEMBERS];
 if (!localStorage.getItem(KEYS.members)) writeJson(localStorage, KEYS.members, members);
@@ -762,10 +764,41 @@ function recordCard(record, sequenceNumber) {
     </article>`;
 }
 
+function paginationButton(label, page, { disabled = false, current = false, ariaLabel = "" } = {}) {
+  return `<button class="pagination-button${current ? " is-current" : ""}" type="button" data-page="${page}"${disabled ? " disabled" : ""}${current ? ' aria-current="page"' : ""}${ariaLabel ? ` aria-label="${ariaLabel}"` : ""}>${label}</button>`;
+}
+
+function renderPagination(totalItems, pageSize) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  currentRecordPage = Math.min(Math.max(1, currentRecordPage), totalPages);
+  recordPagination.hidden = totalPages <= 1;
+  if (totalPages <= 1) {
+    recordPagination.innerHTML = "";
+    return;
+  }
+
+  const groupStart = Math.floor((currentRecordPage - 1) / 10) * 10 + 1;
+  const groupEnd = Math.min(totalPages, groupStart + 9);
+  const pageButtons = [];
+  for (let page = groupStart; page <= groupEnd; page += 1) {
+    pageButtons.push(paginationButton(String(page), page, {
+      current: page === currentRecordPage,
+      ariaLabel: `${page}페이지`,
+    }));
+  }
+
+  recordPagination.innerHTML = [
+    paginationButton("≪", 1, { disabled: currentRecordPage === 1, ariaLabel: "첫 페이지" }),
+    paginationButton("‹", currentRecordPage - 1, { disabled: currentRecordPage === 1, ariaLabel: "이전 페이지" }),
+    ...pageButtons,
+    paginationButton("›", currentRecordPage + 1, { disabled: currentRecordPage === totalPages, ariaLabel: "다음 페이지" }),
+  ].join("");
+}
+
 function renderRecords() {
   const query = searchInput.value.trim().toLowerCase();
   const scope = searchScope.value;
-  const direction = sortOrder?.value === "newest" ? -1 : 1;
+  const pageSize = Number(pageSizeSelect.value) || 10;
   const sequenceById = createRecordSequenceMap();
   const visible = records.filter((record) => {
     const titleText = [record.title, record.passage, formatMeditationRange(record)]
@@ -775,14 +808,20 @@ function renderRecords() {
     const bodyText = String(record.summary || "").toLowerCase();
     const text = scope === "title" ? titleText : scope === "body" ? bodyText : `${titleText} ${bodyText}`;
     return !query || text.includes(query);
-  }).sort((left, right) => compareRecordsByUploadOrder(left, right) * direction);
+  // The library has one fixed order: newest at the top, oldest at the bottom.
+  // Sequence numbers are calculated separately in ascending registration order,
+  // so the first record remains 1 even though it is displayed last.
+  }).sort((left, right) => compareRecordsByUploadOrder(right, left));
+  renderPagination(visible.length, pageSize);
+  const startIndex = (currentRecordPage - 1) * pageSize;
+  const pageRecords = visible.slice(startIndex, startIndex + pageSize);
   if (resultCount) {
     resultCount.innerHTML = query
       ? `<b>${visible.length}</b> / ${records.length}건`
       : `<b>${visible.length}</b>건`;
   }
   recordList.innerHTML = visible.length
-    ? visible.map((record) => recordCard(record, sequenceById.get(record.id) || 1)).join("")
+    ? pageRecords.map((record) => recordCard(record, sequenceById.get(record.id) || 1)).join("")
     : `<div class="empty-state"><strong>${records.length ? "조건에 맞는 자료가 없어요" : "아직 등록된 묵상 자료가 없어요"}</strong>${records.length ? "검색어나 검색 범위를 바꿔보세요." : "관리자가 첫 번째 묵상 자료를 등록하면 여기에 표시됩니다."}</div>`;
 }
 
@@ -1200,9 +1239,25 @@ document.querySelectorAll("[data-view-link]").forEach((button) => {
 });
 
 document.querySelector("#logout-button").addEventListener("click", leaveApp);
-searchInput.addEventListener("input", renderRecords);
-searchScope.addEventListener("change", renderRecords);
-sortOrder.addEventListener("change", renderRecords);
+searchInput.addEventListener("input", () => {
+  currentRecordPage = 1;
+  renderRecords();
+});
+searchScope.addEventListener("change", () => {
+  currentRecordPage = 1;
+  renderRecords();
+});
+pageSizeSelect.addEventListener("change", () => {
+  currentRecordPage = 1;
+  renderRecords();
+});
+recordPagination.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-page]");
+  if (!button || button.disabled) return;
+  currentRecordPage = Number(button.dataset.page) || 1;
+  renderRecords();
+  document.querySelector(".library-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 window.addEventListener("scroll", updateBackToTopVisibility, { passive: true });
 backToTopButton.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 

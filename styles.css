@@ -458,6 +458,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .search-box > span { position: absolute; top: 8px; left: 15px; color: var(--muted); font-size: 22px; }
 .search-box input { padding-left: 42px; background: var(--surface); }
 .library-toolbar select { width: 170px; background: var(--surface); }
+.record-view-controls { display: flex; justify-content: flex-end; margin: -4px 0 12px; }
+.page-size-control { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.page-size-control select { width: 140px; min-height: 40px; padding: 8px 34px 8px 13px; border-radius: 12px; background: var(--surface); font-size: 13px; }
 .record-list-header,
 .record-card { grid-template-columns: 90px minmax(170px, 1fr) minmax(240px, 1.5fr) minmax(110px, .7fr) minmax(125px, .65fr); }
 .record-list-header {
@@ -506,6 +509,13 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .small-button.danger { color: var(--danger); }
 .empty-state { padding: 64px 24px; border: 1px dashed #cbd1ca; border-radius: var(--radius-md); color: var(--muted); text-align: center; }
 .empty-state strong { display: block; margin-bottom: 5px; color: var(--ink); font: 600 20px Georgia, "Noto Serif KR", serif; }
+.record-pagination { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; margin-top: 28px; }
+.record-pagination[hidden] { display: none; }
+.pagination-button { display: inline-grid; width: 34px; height: 34px; padding: 0; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--green-dark); font: 700 14px/1 Pretendard, "Noto Sans KR", sans-serif; cursor: pointer; transition: background-color 160ms ease, color 160ms ease, transform 160ms ease; }
+.pagination-button:hover:not(:disabled):not(.is-current) { transform: translateY(-1px); background: var(--sage-2); }
+.pagination-button:focus-visible { outline: 3px solid rgba(56,100,80,.2); outline-offset: 2px; }
+.pagination-button.is-current { background: var(--green); color: white; }
+.pagination-button:disabled { opacity: .32; cursor: default; }
 
 .detail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 38px 0 16px; }
 .detail-record-actions { display: flex; gap: 8px; }
@@ -794,12 +804,17 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
   .section-heading-actions { align-items: flex-end; flex-direction: column-reverse; gap: 7px; }
   .library-toolbar { flex-direction: column; }
   .library-toolbar select { width: 100%; }
+  .record-view-controls { justify-content: stretch; margin-top: -4px; }
+  .page-size-control { width: 100%; justify-content: space-between; }
+  .page-size-control select { width: min(170px, 55%); }
   .record-list-header { display: none; }
   .record-card { grid-template-columns: 1fr 1fr; gap: 18px 14px; padding: 19px 17px; }
   .record-cell { padding: 0; font-size: 16px; }
   .record-cell::before { display: block; margin-bottom: 3px; color: var(--muted); content: attr(data-label); font-size: 13px; font-weight: 650; }
   .record-index { font-size: 20px; }
   .record-status { grid-column: 1 / -1; justify-content: center; }
+  .record-pagination { flex-wrap: wrap; gap: 4px; margin-top: 22px; }
+  .pagination-button { width: 32px; height: 32px; }
   .file-badge { width: 48px; height: 56px; }
   .record-actions { grid-column: 1 / -1; flex-wrap: wrap; padding-top: 2px; }
   .record-actions .small-button { flex: 1 1 auto; min-height: 42px; }

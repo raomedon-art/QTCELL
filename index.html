@@ -9,7 +9,7 @@
     <meta name="description" content="승인된 교회 구성원만 함께 보는 비공개 묵상 나눔 자료실" />
     <title>묵상셀 · 비공개 묵상 자료실</title>
     <link rel="icon" type="image/png" href="./assets/soyang-church-logo-cutout.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260827-7" />
+    <link rel="stylesheet" href="./styles.css?v=20260827-8" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">본문 바로가기</a>
@@ -98,13 +98,19 @@
                 <option value="title">제목</option>
                 <option value="body">본문 내용</option>
               </select>
-              <select id="sort-order" aria-label="자료 정렬 순서">
-                <option value="newest" selected>최근 등록순</option>
-                <option value="oldest">오래된 등록순</option>
-              </select>
               <label class="search-box">
                 <span aria-hidden="true">⌕</span>
                 <input id="search-input" type="search" placeholder="검색" aria-label="묵상 자료 검색" />
+              </label>
+            </div>
+            <div class="record-view-controls">
+              <label class="page-size-control" for="page-size">
+                <span>게시물 표시</span>
+                <select id="page-size" aria-label="페이지당 게시물 수">
+                  <option value="10" selected>10개씩 보기</option>
+                  <option value="20">20개씩 보기</option>
+                  <option value="30">30개씩 보기</option>
+                </select>
               </label>
             </div>
             <div class="record-list-header" aria-hidden="true">
@@ -115,6 +121,7 @@
               <span>조회수</span>
             </div>
             <div class="record-list" id="record-list" aria-live="polite" aria-busy="false"></div>
+            <nav class="record-pagination" id="record-pagination" aria-label="자료 목록 페이지" hidden></nav>
           </section>
         </section>
 
@@ -349,6 +356,6 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="./cloud-config.js?v=20260827-3"></script>
-    <script src="./app.js?v=20260827-14"></script>
+    <script src="./app.js?v=20260827-16"></script>
   </body>
 </html>
