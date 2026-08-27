@@ -537,10 +537,24 @@ async function migrateLocalDataToCloud() {
   updateCloudSyncPanel("기존 자료와 첨부 파일을 공유 저장소로 옮기는 중입니다…");
   try {
     if (localMembersAtStartup.length) {
-      const memberResult = await cloudClient
+      const existingMemberResult = await cloudClient
         .from(CLOUD_TABLES.members)
-        .upsert(localMembersAtStartup.map(cloudMemberToRow), { onConflict: "name" });
-      if (memberResult.error) throw memberResult.error;
+        .select("name");
+      if (existingMemberResult.error) throw existingMemberResult.error;
+
+      const existingMemberNames = new Set(
+        (existingMemberResult.data || []).map((member) => String(member.name || "").trim()),
+      );
+      const newMembers = localMembersAtStartup
+        .filter((member) => !existingMemberNames.has(String(member.name || "").trim()))
+        .map(cloudMemberToRow);
+
+      if (newMembers.length) {
+        const memberResult = await cloudClient
+          .from(CLOUD_TABLES.members)
+          .insert(newMembers);
+        if (memberResult.error) throw memberResult.error;
+      }
     }
     for (const localRecord of localRecordsAtStartup) {
       const asset = await getLocalRecordAsset(localRecord.id);
@@ -554,7 +568,7 @@ async function migrateLocalDataToCloud() {
     updateCloudSyncPanel("이 브라우저의 기존 자료까지 공유 저장소로 옮겼습니다.");
     showToast("기존 자료를 공유 저장소로 옮겼습니다.");
   } catch (error) {
-    console.error("Cloud migration failed", error);
+    console.error("Cloud migration failed", error?.message || error, error);
     updateCloudSyncPanel("자료 이전에 실패했습니다. Supabase 설정과 정책을 확인해주세요.");
     showToast("자료 이전에 실패했습니다. 설정을 확인해주세요.");
   } finally {
