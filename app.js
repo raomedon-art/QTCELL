@@ -613,12 +613,25 @@ function canDelete(record) {
   return session?.role === "admin" || (session?.role === "uploader" && record.owner === session.name);
 }
 
-function recordCard(record, index) {
+function createRecordSequenceMap() {
+  const orderedRecords = [...records].sort((left, right) => {
+    const leftTime = new Date(left.createdAt || 0).getTime();
+    const rightTime = new Date(right.createdAt || 0).getTime();
+    const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
+    const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
+    if (safeLeftTime !== safeRightTime) return safeLeftTime - safeRightTime;
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  });
+
+  return new Map(orderedRecords.map((record, index) => [record.id, index + 1]));
+}
+
+function recordCard(record, sequenceNumber) {
   const viewCount = Math.max(0, Number(record.viewCount) || 0);
   const newBadge = isNewRecord(record) ? `<span class="record-new-badge">NEW</span>` : "";
   return `
     <article class="record-card" data-record-id="${escapeHtml(record.id)}" role="button" tabindex="0" aria-label="${escapeHtml(formatMeditationRange(record))} 상세 보기">
-      <div class="record-cell record-index" data-label="구분">${String(index + 1).padStart(2, "0")}</div>
+      <div class="record-cell record-index" data-label="구분">${String(sequenceNumber).padStart(2, "0")}</div>
       <div class="record-cell record-date" data-label="올린 날짜">${escapeHtml(formatUploadedDate(record))}</div>
       <div class="record-cell record-passage" data-label="묵상일시 및 범위">${escapeHtml(formatMeditationRange(record))}</div>
       <div class="record-cell record-owner" data-label="등록자">관리자</div>
@@ -629,6 +642,7 @@ function recordCard(record, index) {
 function renderRecords() {
   const query = searchInput.value.trim().toLowerCase();
   const scope = searchScope.value;
+  const sequenceById = createRecordSequenceMap();
   const visible = records.filter((record) => {
     const titleText = [record.title, record.passage, formatMeditationRange(record)]
       .filter(Boolean)
@@ -639,7 +653,7 @@ function renderRecords() {
     return !query || text.includes(query);
   });
   recordList.innerHTML = visible.length
-    ? visible.map((record, index) => recordCard(record, index)).join("")
+    ? visible.map((record) => recordCard(record, sequenceById.get(record.id) || 1)).join("")
     : `<div class="empty-state"><strong>${records.length ? "조건에 맞는 자료가 없어요" : "아직 등록된 묵상 자료가 없어요"}</strong>${records.length ? "검색어를 바꿔보세요." : "관리자가 첫 번째 AI 정리 파일을 등록하면 여기에 표시됩니다."}</div>`;
 }
 
