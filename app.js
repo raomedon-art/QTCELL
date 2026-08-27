@@ -1480,7 +1480,7 @@ recordList.addEventListener("keydown", (event) => {
 });
 
 migrateCloudDataButton.addEventListener("click", migrateLocalDataToCloud);
-syncRefreshButton.addEventListener("click", () => refreshCloudData({ announce: true }));
+syncRefreshButton?.addEventListener("click", () => refreshCloudData({ announce: true }));
 
 window.addEventListener("focus", () => {
   if (session && document.visibilityState === "visible") refreshCloudData();
