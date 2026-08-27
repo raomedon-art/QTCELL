@@ -101,6 +101,19 @@ function writeJson(storage, key, value) {
   storage.setItem(key, JSON.stringify(value));
 }
 
+function setRecordContentHtml(record, contentHtml = "") {
+  if (cloudEnabled) {
+    record.contentHtml = contentHtml;
+    return;
+  }
+  Object.defineProperty(record, "contentHtml", {
+    value: contentHtml,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+}
+
 function escapeHtml(value = "") {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -126,7 +139,8 @@ function sanitizeEditorHtml(html = "") {
     "SVG", "G", "PATH", "RECT", "CIRCLE", "ELLIPSE", "LINE", "POLYLINE", "POLYGON", "TEXT", "TSPAN",
   ]);
   const styleProperties = [
-    "color", "background-color", "font-family", "font-size", "font-weight", "font-style", "line-height",
+    "color", "background-color", "background-image", "background-size", "background-position", "background-repeat",
+    "font-family", "font-size", "font-weight", "font-style", "line-height",
     "letter-spacing", "text-align", "text-decoration", "vertical-align", "white-space", "list-style-type",
     "border", "border-top", "border-right", "border-bottom", "border-left", "border-color", "border-style",
     "border-width", "border-collapse", "border-spacing", "border-radius", "padding", "padding-top", "padding-right",
@@ -163,7 +177,12 @@ function sanitizeEditorHtml(html = "") {
     }
     const safeStyles = styleProperties.flatMap((property) => {
       const value = element.style.getPropertyValue(property).trim();
-      if (!value || /(?:javascript:|expression\s*\(|url\s*\()/i.test(value) || !CSS.supports(property, value)) return [];
+      if (!value || /(?:javascript:|expression\s*\()/i.test(value) || !CSS.supports(property, value)) return [];
+      if (/url\s*\(/i.test(value)) {
+        const safeBackground = property === "background-image"
+          && /^url\(["']?(?:https?:\/\/|data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,)/i.test(value);
+        if (!safeBackground || value.length > 36 * 1024 * 1024) return [];
+      }
       return [[property, value, element.style.getPropertyPriority(property)]];
     });
     const allowedAttributes = tagAttributes[tagName] || new Set();
@@ -455,14 +474,19 @@ async function saveRecordData(record, file, contentHtml = "", { isNew = false } 
     await saveCloudRecord(record, file, contentHtml);
   } else {
     await saveLocalAsset(record.id, file, contentHtml);
+    setRecordContentHtml(record, contentHtml);
   }
   if (isNew && !records.some((item) => item.id === record.id)) records.unshift(record);
   if (!cloudEnabled) writeJson(localStorage, KEYS.records, records);
 }
 
 async function getRecordAsset(id) {
-  if (!cloudEnabled) return getLocalRecordAsset(id);
   const record = records.find((item) => item.id === id);
+  if (!cloudEnabled) {
+    const localAsset = await getLocalRecordAsset(id);
+    if (localAsset?.contentHtml || !record?.contentHtml) return localAsset;
+    return { ...(localAsset || { id, file: null }), contentHtml: record.contentHtml };
+  }
   return record ? { id, file: null, contentHtml: record.contentHtml || "" } : null;
 }
 
@@ -520,7 +544,7 @@ async function migrateLocalDataToCloud() {
     }
     for (const localRecord of localRecordsAtStartup) {
       const asset = await getLocalRecordAsset(localRecord.id);
-      await saveCloudRecord({ ...localRecord }, asset?.file || null, asset?.contentHtml || "");
+      await saveCloudRecord({ ...localRecord }, asset?.file || null, asset?.contentHtml || localRecord.contentHtml || "");
     }
     await loadCloudState();
     renderRecords();
@@ -639,10 +663,12 @@ async function openRecordDetail(recordId, { countView = true } = {}) {
   detailDownloadButton.setAttribute("aria-label", record.fileName ? `${record.fileName} 다운로드` : "등록 파일 없음");
   try {
     const asset = await getRecordAsset(record.id);
-    if (asset?.contentHtml) detailSummary.innerHTML = sanitizeEditorHtml(asset.contentHtml);
+    const savedHtml = asset?.contentHtml || record.contentHtml || "";
+    if (savedHtml) detailSummary.innerHTML = sanitizeEditorHtml(savedHtml);
     else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
   } catch {
-    detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
+    if (record.contentHtml) detailSummary.innerHTML = sanitizeEditorHtml(record.contentHtml);
+    else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
   }
   switchView("detail");
 }
@@ -655,11 +681,14 @@ async function openDetailEditor() {
   detailEditFile.value = "";
   try {
     const asset = await getRecordAsset(record.id);
-    detailRichEditor.innerHTML = asset?.contentHtml
-      ? sanitizeEditorHtml(asset.contentHtml)
+    const savedHtml = asset?.contentHtml || record.contentHtml || "";
+    detailRichEditor.innerHTML = savedHtml
+      ? sanitizeEditorHtml(savedHtml)
       : (record.summary ? `<p>${escapeHtml(record.summary).replaceAll("\n", "<br>")}</p>` : "");
   } catch {
-    detailRichEditor.innerHTML = record.summary ? `<p>${escapeHtml(record.summary).replaceAll("\n", "<br>")}</p>` : "";
+    detailRichEditor.innerHTML = record.contentHtml
+      ? sanitizeEditorHtml(record.contentHtml)
+      : (record.summary ? `<p>${escapeHtml(record.summary).replaceAll("\n", "<br>")}</p>` : "");
   }
   detailSummary.hidden = true;
   detailEditForm.hidden = false;
@@ -733,6 +762,62 @@ function readFileAsDataUrl(file) {
   });
 }
 
+async function makeContainerImagesPersistent(container) {
+  const images = [...container.querySelectorAll("img")];
+  for (const image of images) {
+    const src = image.getAttribute("src") || "";
+    if (!src.startsWith("blob:")) continue;
+    try {
+      const response = await fetch(src);
+      if (!response.ok) throw new Error("이미지를 읽지 못했습니다.");
+      image.setAttribute("src", await readFileAsDataUrl(await response.blob()));
+    } catch {
+      image.removeAttribute("src");
+    }
+  }
+
+  const backgroundElements = [...container.querySelectorAll("[style]")];
+  for (const element of backgroundElements) {
+    const backgroundImage = element.style.backgroundImage || "";
+    const match = backgroundImage.match(/url\(["']?(blob:[^)"']+)/i);
+    if (!match) continue;
+    try {
+      const response = await fetch(match[1]);
+      if (!response.ok) throw new Error("배경 이미지를 읽지 못했습니다.");
+      const dataUrl = await readFileAsDataUrl(await response.blob());
+      element.style.backgroundImage = `url("${dataUrl}")`;
+    } catch {
+      element.style.removeProperty("background-image");
+    }
+  }
+}
+
+async function prepareEditorHtmlForSave(editor) {
+  const clone = editor.cloneNode(true);
+  const sourceCanvases = [...editor.querySelectorAll("canvas")];
+  [...clone.querySelectorAll("canvas")].forEach((canvas, index) => {
+    try {
+      const image = document.createElement("img");
+      image.src = sourceCanvases[index].toDataURL("image/png");
+      image.alt = sourceCanvases[index].getAttribute("aria-label") || "붙여넣은 도형";
+      image.width = sourceCanvases[index].width;
+      image.height = sourceCanvases[index].height;
+      canvas.replaceWith(image);
+    } catch {
+      canvas.remove();
+    }
+  });
+  await makeContainerImagesPersistent(clone);
+  return sanitizeEditorHtml(clone.innerHTML);
+}
+
+async function preparePastedHtml(html = "") {
+  const template = document.createElement("template");
+  template.innerHTML = String(html);
+  await makeContainerImagesPersistent(template.content);
+  return sanitizeEditorHtml(template.innerHTML);
+}
+
 async function insertImagesIntoEditor(files, editor = activeEditor) {
   const images = [...files].filter((file) => file.type.startsWith("image/"));
   if (!images.length) {
@@ -783,7 +868,7 @@ async function handleEditorPaste(event, editor) {
   if (!sourceHtml && !pastedImages.length) return;
 
   event.preventDefault();
-  const safeHtml = sourceHtml ? sanitizeEditorHtml(sourceHtml) : plainTextToEditorHtml(sourceText);
+  const safeHtml = sourceHtml ? await preparePastedHtml(sourceHtml) : plainTextToEditorHtml(sourceText);
   if (safeHtml) insertHtmlIntoEditor(safeHtml, editor);
 
   const htmlAlreadyContainsVisual = /<(?:img|svg)\b/i.test(safeHtml);
@@ -1034,8 +1119,8 @@ detailEditForm.addEventListener("submit", async (event) => {
   if (replacementFile && !validateUpload(replacementFile)) return;
   const meetingDate = detailEditDate.value;
   const passage = detailEditPassage.value.trim();
-  const contentHtml = sanitizeEditorHtml(detailRichEditor.innerHTML);
   try {
+    const contentHtml = await prepareEditorHtmlForSave(detailRichEditor);
     const existingAsset = await getRecordAsset(record.id);
     record.meetingDate = meetingDate;
     record.passage = passage;
@@ -1089,7 +1174,6 @@ uploadForm.addEventListener("submit", async (event) => {
   const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
   const meetingDate = String(data.get("meetingDate") || "");
   const passage = String(data.get("passage") || "").trim();
-  const contentHtml = sanitizeEditorHtml(richEditor.innerHTML);
   const summaryText = richEditor.innerText.trim();
   const record = {
     id,
@@ -1108,6 +1192,7 @@ uploadForm.addEventListener("submit", async (event) => {
   };
 
   try {
+    const contentHtml = await prepareEditorHtmlForSave(richEditor);
     await saveRecordData(record, file, contentHtml, { isNew: true });
     uploadForm.reset();
     richEditor.innerHTML = "";
