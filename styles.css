@@ -41,6 +41,21 @@ img { max-width: 100%; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
 [hidden] { display: none !important; }
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 100;
+  transform: translateY(-140%);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--green-dark);
+  color: #fff;
+  font-weight: 800;
+  text-decoration: none;
+  transition: transform 150ms ease;
+}
+.skip-link:focus { transform: translateY(0); }
 
 .login-screen {
   display: grid;
@@ -211,6 +226,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .button.compact { min-height: 38px; padding: 0 16px; font-size: 12px; }
 .button.wide { width: 100%; }
 .button.text-only { background: transparent; color: var(--muted); }
+.button:disabled, button:disabled { cursor: not-allowed; opacity: .58; transform: none !important; }
+.button[aria-busy="true"] { box-shadow: none; }
 .demo-access { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 22px 0 12px; color: var(--muted); font-size: 11px; }
 .demo-access button { border: 0; border-bottom: 1px solid var(--green); padding: 2px 0; background: transparent; color: var(--green); cursor: pointer; }
 .security-note { display: block; color: #8a928e; text-align: center; font-size: 10px; }
@@ -229,6 +246,44 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
   background: rgba(247,245,239,.9);
   backdrop-filter: blur(18px);
 }
+.sync-indicator {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid rgba(56,100,80,.14);
+  border-radius: 999px;
+  padding: 0 7px 0 11px;
+  background: rgba(255,254,250,.78);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa39e; box-shadow: 0 0 0 4px rgba(154,163,158,.12); }
+.sync-indicator[data-state="synced"] .sync-dot { background: #3f8b65; box-shadow: 0 0 0 4px rgba(63,139,101,.12); }
+.sync-indicator[data-state="syncing"] .sync-dot { background: var(--gold); animation: sync-pulse 1s ease-in-out infinite; }
+.sync-indicator[data-state="offline"] .sync-dot,
+.sync-indicator[data-state="error"] .sync-dot { background: var(--danger); box-shadow: 0 0 0 4px rgba(159,77,71,.12); }
+.sync-indicator[data-state="local"] .sync-dot { background: #7b8580; }
+.sync-indicator button {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--sage-2);
+  color: var(--green-dark);
+  cursor: pointer;
+}
+.sync-indicator[data-state="syncing"] button { animation: sync-spin 900ms linear infinite; }
+@keyframes sync-pulse { 50% { transform: scale(.75); opacity: .65; } }
+@keyframes sync-spin { to { transform: rotate(360deg); } }
 .desktop-nav { grid-column: 2; grid-row: 1; display: flex; gap: 5px; justify-self: start; }
 .nav-link { border: 0; border-radius: 99px; padding: 8px 16px; background: transparent; color: var(--muted); cursor: pointer; }
 .nav-link.is-active { background: var(--green-dark); color: white; }
@@ -399,7 +454,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .result-count { color: var(--muted); font-size: 12px; }
 .result-count b { color: var(--green); font: 22px Georgia, serif; }
 .library-toolbar { display: flex; gap: 10px; margin-bottom: 18px; }
-.search-box { position: relative; flex: 1; }
+.search-box { position: relative; flex: 1; min-width: 0; }
 .search-box > span { position: absolute; top: 8px; left: 15px; color: var(--muted); font-size: 22px; }
 .search-box input { padding-left: 42px; background: var(--surface); }
 .library-toolbar select { width: 170px; background: var(--surface); }
@@ -508,6 +563,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .form-section-heading > span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: var(--green-dark); color: white; font: 11px Georgia, serif; }
 .form-section-heading h2, .form-section-heading p { margin: 0; }
 .form-section-heading h2 { font: 600 21px Georgia, "Noto Serif KR", serif; }
+.form-section-heading h2 small { color: var(--muted); font-size: .58em; font-weight: 650; }
 .form-section-heading p { color: var(--muted); font-size: 11px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .field.full { grid-column: 1 / -1; }
@@ -688,7 +744,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
   .login-image-mobile { display: none; }
   .mobile-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 30px; font: 600 20px Georgia, serif; }
   .app-shell { width: min(100% - 24px, 720px); padding-bottom: 60px; }
-  .topbar { grid-template-columns: minmax(0, 1fr) auto; min-height: 72px; gap: 10px; }
+  .topbar { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; min-height: 72px; gap: 6px 10px; padding: 7px 0 9px; }
+  .sync-indicator { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; justify-content: center; min-height: 30px; }
   .desktop-nav, .profile-button span { display: none; }
   .header-church-brand { grid-column: 1; grid-row: 1; justify-self: start; min-width: 0; }
   .user-menu { grid-column: 2; grid-row: 1; }
@@ -787,9 +844,20 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
   .admin-entry { min-height: 30px; padding: 0 9px; font-size: 10px; }
   .profile-button b { width: 32px; height: 32px; }
   .logout-button { padding: 4px 0; font-size: 10px; }
+  .sync-indicator { font-size: 10px; }
   .section-heading { align-items: flex-start; flex-direction: column; gap: 12px; }
   .section-heading-actions { width: 100%; align-items: center; flex-direction: row; justify-content: space-between; }
   .section-heading h2 { font-size: 27px; }
   .form-section-heading { gap: 10px; }
   .form-section-heading > span { width: 29px; height: 29px; flex: 0 0 29px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+@media (prefers-contrast: more) {
+  .record-card, .form-card, .record-detail-card, input, select, textarea { border-color: #69756f; }
+  .button.secondary { border-width: 2px; }
 }

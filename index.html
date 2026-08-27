@@ -5,9 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="승인된 교회 구성원만 함께 보는 비공개 묵상 나눔 자료실" />
     <title>묵상셀 · 비공개 묵상 자료실</title>
-  <link rel="stylesheet" href="./styles.css?v=20260827-3" />
+    <link rel="icon" type="image/png" href="./assets/soyang-church-logo-cutout.png" />
+    <link rel="stylesheet" href="./styles.css?v=20260827-4" />
   </head>
   <body>
+    <a class="skip-link" href="#main-content">본문 바로가기</a>
     <section class="login-screen" id="login-screen">
       <div class="login-visual">
         <img class="church-logo-overlay" src="./assets/soyang-church-logo-cutout.png" alt="소양제일교회 기독교대한성결교회" />
@@ -46,6 +48,11 @@
 
     <div class="app-shell" id="app-shell" hidden>
       <header class="topbar">
+        <div class="sync-indicator" id="sync-indicator" data-state="checking" aria-label="공유 저장소 상태">
+          <span class="sync-dot" aria-hidden="true"></span>
+          <span id="sync-status-text" role="status" aria-live="polite">연결 확인 중</span>
+          <button id="sync-refresh-button" type="button" aria-label="공유 자료 새로고침" title="공유 자료 새로고침">↻</button>
+        </div>
         <div class="user-menu">
           <button class="admin-entry protected-view-trigger admin-only" type="button" data-protected-view="admin">관리자</button>
           <button class="profile-button" id="profile-button" aria-label="사용자 메뉴">
@@ -64,7 +71,7 @@
         </button>
       </header>
 
-      <main>
+      <main id="main-content" tabindex="-1">
         <section class="view is-active" data-view="library">
           <figure class="community-hero">
             <img src="./assets/community-meditation-hero-v3.png" alt="밝은 공간에서 열린 성경을 중심으로 묵상을 나누는 교회 공동체" />
@@ -77,6 +84,7 @@
             <div class="section-heading">
               <div><span class="eyebrow">MEDITATION ARCHIVE</span><h2>묵상 나눔 자료</h2></div>
               <div class="section-heading-actions">
+                <p class="result-count" id="result-count" role="status" aria-live="polite"><b>0</b>건</p>
                 <button class="button secondary compact protected-view-trigger admin-only" type="button" data-protected-view="upload">자료 등록</button>
               </div>
             </div>
@@ -86,6 +94,10 @@
                 <option value="all">전체</option>
                 <option value="title">제목</option>
                 <option value="body">본문 내용</option>
+              </select>
+              <select id="sort-order" aria-label="자료 정렬 순서">
+                <option value="oldest">등록순</option>
+                <option value="newest">최근 등록순</option>
               </select>
               <label class="search-box">
                 <span aria-hidden="true">⌕</span>
@@ -99,7 +111,7 @@
               <span>등록자</span>
               <span>조회수</span>
             </div>
-            <div class="record-list" id="record-list"></div>
+            <div class="record-list" id="record-list" aria-live="polite" aria-busy="false"></div>
           </section>
         </section>
 
@@ -129,7 +141,7 @@
                 <div class="field-grid">
                   <label class="field"><span>묵상날짜 *</span><input id="detail-edit-date" type="date" required /></label>
                   <label class="field"><span>나눔범위</span><input id="detail-edit-passage" placeholder="예: 빌립보서 4:6–7" /></label>
-                  <label class="field full"><span>첨부 파일 변경</span><input id="detail-edit-file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" /></label>
+                  <label class="field full"><span>첨부 파일 변경 (선택)</span><input id="detail-edit-file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" /></label>
                   <div class="field full rich-editor-field">
                     <span class="editor-label">묵상 나눔 정리</span>
                     <div class="editor-toolbar" id="detail-editor-toolbar" role="toolbar" aria-label="묵상 나눔 수정 도구">
@@ -153,7 +165,7 @@
                       <button type="button" id="detail-insert-editor-image" aria-label="이미지 삽입">이미지</button>
                       <input id="detail-editor-image-input" type="file" accept="image/*" multiple hidden />
                     </div>
-                    <div class="rich-editor" id="detail-rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="묵상 나눔 내용을 입력하고 이미지도 삽입할 수 있습니다."></div>
+                    <div class="rich-editor" id="detail-rich-editor" contenteditable="true" role="textbox" aria-label="묵상 나눔 내용 수정" aria-multiline="true" data-placeholder="묵상 나눔 내용을 입력하고 이미지도 삽입할 수 있습니다."></div>
                   </div>
                 </div>
                 <div class="detail-edit-actions">
@@ -200,18 +212,18 @@
                     <button type="button" id="insert-editor-image" aria-label="이미지 삽입">이미지</button>
                     <input id="editor-image-input" type="file" accept="image/*" multiple hidden />
                   </div>
-                  <div class="rich-editor" id="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="묵상 나눔의 정리 내용을 입력하고 이미지도 삽입할 수 있습니다."></div>
+                  <div class="rich-editor" id="rich-editor" contenteditable="true" role="textbox" aria-label="묵상 나눔 내용" aria-multiline="true" data-placeholder="묵상 나눔의 정리 내용을 입력하고 이미지도 삽입할 수 있습니다."></div>
                 </div>
               </div>
             </div>
 
             <div class="form-card">
-              <div class="form-section-heading"><span>02</span><div><h2>업로드하기</h2></div></div>
+              <div class="form-section-heading"><span>02</span><div><h2>첨부 파일 <small>(선택)</small></h2></div></div>
               <label class="drop-zone" id="drop-zone">
-                <input id="file-input" name="file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" required />
+                <input id="file-input" name="file" type="file" accept=".pdf,.ppt,.pptx,.hwp,.hwpx,.doc,.docx,.txt,.md,image/*" aria-describedby="attachment-help" />
                 <span class="upload-icon" aria-hidden="true">↑</span>
-                <strong>파일을 선택하거나 여기로 끌어오세요</strong>
-                <small>PDF, PPT, 한글, Word, TXT, Markdown, 이미지 · 최대 25MB</small>
+                <strong>필요한 경우 파일을 선택하거나 여기로 끌어오세요</strong>
+                <small id="attachment-help">선택 사항 · PDF, PPT, 한글, Word, TXT, Markdown, 이미지 · 최대 25MB</small>
                 <span class="selected-file" id="selected-file"></span>
               </label>
             </div>
@@ -329,7 +341,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./cloud-config.js?v=20260827-2"></script>
-    <script src="./app.js?v=20260827-5"></script>
+    <script src="./cloud-config.js?v=20260827-3"></script>
+    <script src="./app.js?v=20260827-8"></script>
   </body>
 </html>

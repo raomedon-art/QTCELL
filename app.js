@@ -6,7 +6,20 @@ const KEYS = {
   adminPassword: "malsseumgyeol.private.admin-password.v1",
 };
 
-const CLOUD_CONFIG = window.QTCELL_CLOUD || {};
+// Publishable keys are designed for browser use. Keeping a built-in fallback means
+// replacing the static site files cannot accidentally switch the site back to
+// device-only storage when cloud-config.js is omitted or left blank.
+const DEFAULT_CLOUD_CONFIG = Object.freeze({
+  supabaseUrl: "https://pevpdhrjlmdpgbilquwe.supabase.co",
+  supabaseAnonKey: "sb_publishable_jKkqBIEpTjMGMxObZttP-g_FheNzmHO",
+  bucket: "qtcell-files",
+});
+const pageCloudConfig = window.QTCELL_CLOUD || {};
+const CLOUD_CONFIG = Object.freeze({
+  supabaseUrl: String(pageCloudConfig.supabaseUrl || DEFAULT_CLOUD_CONFIG.supabaseUrl).trim(),
+  supabaseAnonKey: String(pageCloudConfig.supabaseAnonKey || DEFAULT_CLOUD_CONFIG.supabaseAnonKey).trim(),
+  bucket: String(pageCloudConfig.bucket || DEFAULT_CLOUD_CONFIG.bucket).trim(),
+});
 const CLOUD_TABLES = { records: "qtcell_records", members: "qtcell_members" };
 const cloudEnabled = Boolean(
   window.supabase?.createClient
@@ -39,6 +52,8 @@ const uploadForm = document.querySelector("#upload-form");
 const recordList = document.querySelector("#record-list");
 const searchInput = document.querySelector("#search-input");
 const searchScope = document.querySelector("#search-scope");
+const sortOrder = document.querySelector("#sort-order");
+const resultCount = document.querySelector("#result-count");
 const toast = document.querySelector("#toast");
 const fileInput = document.querySelector("#file-input");
 const selectedFile = document.querySelector("#selected-file");
@@ -70,10 +85,15 @@ const adminPasswordError = document.querySelector("#admin-password-error");
 const backToTopButton = document.querySelector("#back-to-top");
 const cloudSyncStatus = document.querySelector("#cloud-sync-status");
 const migrateCloudDataButton = document.querySelector("#migrate-cloud-data");
+const syncIndicator = document.querySelector("#sync-indicator");
+const syncStatusText = document.querySelector("#sync-status-text");
+const syncRefreshButton = document.querySelector("#sync-refresh-button");
 
 let session = readJson(sessionStorage, KEYS.session, null);
 const localRecordsAtStartup = readJson(localStorage, KEYS.records, []);
 const localMembersAtStartup = readJson(localStorage, KEYS.members, DEFAULT_MEMBERS);
+const hasLocalSnapshotAtStartup = localStorage.getItem(KEYS.records) !== null
+  || localStorage.getItem(KEYS.members) !== null;
 let records = Array.isArray(localRecordsAtStartup) ? [...localRecordsAtStartup] : [];
 let members = Array.isArray(localMembersAtStartup) ? [...localMembersAtStartup] : [...DEFAULT_MEMBERS];
 let toastTimer;
@@ -84,6 +104,8 @@ let savedEditorRange = null;
 let activeEditor = richEditor;
 let currentDetailRecordId = null;
 let pendingDeleteRecordId = null;
+let cloudRefreshPromise = null;
+let uploadFormDirty = false;
 
 if (!Array.isArray(members) || !members.length) members = [...DEFAULT_MEMBERS];
 if (!localStorage.getItem(KEYS.members)) writeJson(localStorage, KEYS.members, members);
@@ -226,6 +248,77 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add("is-visible");
   toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2600);
+}
+
+function setButtonBusy(button, isBusy, busyLabel = "처리 중…") {
+  if (!button) return;
+  if (isBusy) {
+    button.dataset.idleHtml = button.innerHTML;
+    button.textContent = busyLabel;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    return;
+  }
+  if (button.dataset.idleHtml) button.innerHTML = button.dataset.idleHtml;
+  delete button.dataset.idleHtml;
+  button.disabled = false;
+  button.removeAttribute("aria-busy");
+}
+
+function syncTimeLabel(date = new Date()) {
+  return new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function setSyncState(state, message) {
+  if (!syncIndicator || !syncStatusText || !syncRefreshButton) return;
+  syncIndicator.dataset.state = state;
+  syncStatusText.textContent = message;
+  const refreshing = state === "syncing";
+  syncRefreshButton.disabled = refreshing || !cloudEnabled || !navigator.onLine;
+  syncRefreshButton.setAttribute("aria-busy", String(refreshing));
+}
+
+function cloudErrorMessage(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  if (code === "PGRST205" || /qtcell_records|schema cache/i.test(message)) return "공유 테이블 설정 필요";
+  if (/401|403|JWT|API key/i.test(`${code} ${message}`)) return "공유 저장소 권한 오류";
+  return "동기화 연결 오류";
+}
+
+async function refreshCloudData({ announce = false } = {}) {
+  if (!cloudEnabled) {
+    setSyncState("local", "이 기기에 저장 중");
+    return false;
+  }
+  if (!navigator.onLine) {
+    setSyncState("offline", "오프라인");
+    return false;
+  }
+  if (cloudRefreshPromise) return cloudRefreshPromise;
+
+  recordList.setAttribute("aria-busy", "true");
+  setSyncState("syncing", "동기화 중…");
+  cloudRefreshPromise = (async () => {
+    try {
+      await loadCloudState();
+      renderRecords();
+      renderMembers();
+      updateCloudSyncPanel();
+      setSyncState("synced", `동기화됨 · ${syncTimeLabel()}`);
+      if (announce) showToast("최신 공유 자료를 불러왔습니다.");
+      return true;
+    } catch (error) {
+      console.error("Cloud refresh failed", error?.message || error, error);
+      setSyncState("error", cloudErrorMessage(error));
+      if (announce) showToast("공유 자료를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.");
+      return false;
+    } finally {
+      recordList.setAttribute("aria-busy", "false");
+      cloudRefreshPromise = null;
+    }
+  })();
+  return cloudRefreshPromise;
 }
 
 function updateBackToTopVisibility() {
@@ -431,7 +524,7 @@ function updateCloudSyncPanel(message = "") {
   }
   cloudSyncStatus.textContent = message || "공유 저장소에 연결되었습니다. 새 자료는 모든 기기에 동기화됩니다.";
   const migrationDone = localStorage.getItem(cloudMigrationKey) === "done";
-  migrateCloudDataButton.hidden = migrationDone || (!localRecordsAtStartup.length && !localMembersAtStartup.length);
+  migrateCloudDataButton.hidden = migrationDone || !hasLocalSnapshotAtStartup;
 }
 
 async function loadCloudState() {
@@ -444,6 +537,11 @@ async function loadCloudState() {
   records = (recordResult.data || []).map(cloudRecordFromRow);
   members = (memberResult.data || []).map(cloudMemberFromRow);
   if (!members.length) members = [...DEFAULT_MEMBERS];
+  // This is a recovery cache, not the source of truth. Supabase remains the
+  // shared store, while the cache keeps the latest list visible during a brief
+  // connection failure or immediately after static files are replaced.
+  writeJson(localStorage, KEYS.records, records);
+  writeJson(localStorage, KEYS.members, members);
 }
 
 async function saveCloudRecord(record, file, contentHtml = "") {
@@ -477,7 +575,7 @@ async function saveRecordData(record, file, contentHtml = "", { isNew = false } 
     setRecordContentHtml(record, contentHtml);
   }
   if (isNew && !records.some((item) => item.id === record.id)) records.unshift(record);
-  if (!cloudEnabled) writeJson(localStorage, KEYS.records, records);
+  writeJson(localStorage, KEYS.records, records);
 }
 
 async function getRecordAsset(id) {
@@ -509,6 +607,7 @@ async function removeRecordData(record) {
   const deleteResult = await cloudClient.from(CLOUD_TABLES.records).delete().eq("id", record.id);
   if (deleteResult.error) throw deleteResult.error;
   records = records.filter((item) => item.id !== record.id);
+  writeJson(localStorage, KEYS.records, records);
   if (record.filePath) await cloudClient.storage.from(cloudBucket).remove([record.filePath]);
 }
 
@@ -520,6 +619,7 @@ async function persistViewCount(record) {
   const result = await cloudClient.rpc("increment_qtcell_view_count", { p_record_id: record.id });
   if (result.error) throw result.error;
   if (Number.isFinite(Number(result.data))) record.viewCount = Number(result.data);
+  writeJson(localStorage, KEYS.records, records);
 }
 
 async function addMemberData(member) {
@@ -528,20 +628,24 @@ async function addMemberData(member) {
     if (result.error) throw result.error;
   }
   members.push(member);
-  if (!cloudEnabled) writeJson(localStorage, KEYS.members, members);
+  writeJson(localStorage, KEYS.members, members);
 }
 
-async function migrateLocalDataToCloud() {
+async function migrateLocalDataToCloud({ silent = false } = {}) {
   if (!cloudEnabled) return;
-  migrateCloudDataButton.disabled = true;
-  updateCloudSyncPanel("기존 자료와 첨부 파일을 공유 저장소로 옮기는 중입니다…");
+  if (!silent) {
+    setButtonBusy(migrateCloudDataButton, true, "자료 이전 중…");
+    updateCloudSyncPanel("기존 자료와 첨부 파일을 공유 저장소로 옮기는 중입니다…");
+  }
   try {
-    if (localMembersAtStartup.length) {
-      const existingMemberResult = await cloudClient
-        .from(CLOUD_TABLES.members)
-        .select("name");
-      if (existingMemberResult.error) throw existingMemberResult.error;
+    const [existingMemberResult, existingRecordResult] = await Promise.all([
+      cloudClient.from(CLOUD_TABLES.members).select("name"),
+      cloudClient.from(CLOUD_TABLES.records).select("id"),
+    ]);
+    if (existingMemberResult.error) throw existingMemberResult.error;
+    if (existingRecordResult.error) throw existingRecordResult.error;
 
+    if (localMembersAtStartup.length) {
       const existingMemberNames = new Set(
         (existingMemberResult.data || []).map((member) => String(member.name || "").trim()),
       );
@@ -556,7 +660,10 @@ async function migrateLocalDataToCloud() {
         if (memberResult.error) throw memberResult.error;
       }
     }
-    for (const localRecord of localRecordsAtStartup) {
+
+    const existingRecordIds = new Set((existingRecordResult.data || []).map((record) => record.id));
+    const missingLocalRecords = localRecordsAtStartup.filter((record) => !existingRecordIds.has(record.id));
+    for (const localRecord of missingLocalRecords) {
       const asset = await getLocalRecordAsset(localRecord.id);
       await saveCloudRecord({ ...localRecord }, asset?.file || null, asset?.contentHtml || localRecord.contentHtml || "");
     }
@@ -566,13 +673,18 @@ async function migrateLocalDataToCloud() {
     localStorage.setItem(cloudMigrationKey, "done");
     migrateCloudDataButton.hidden = true;
     updateCloudSyncPanel("이 브라우저의 기존 자료까지 공유 저장소로 옮겼습니다.");
-    showToast("기존 자료를 공유 저장소로 옮겼습니다.");
+    setSyncState("synced", `동기화됨 · ${syncTimeLabel()}`);
+    if (!silent && missingLocalRecords.length) showToast("기존 자료를 공유 저장소로 옮겼습니다.");
+    return true;
   } catch (error) {
     console.error("Cloud migration failed", error?.message || error, error);
-    updateCloudSyncPanel("자료 이전에 실패했습니다. Supabase 설정과 정책을 확인해주세요.");
-    showToast("자료 이전에 실패했습니다. 설정을 확인해주세요.");
+    if (!silent) {
+      updateCloudSyncPanel("자료 이전에 실패했습니다. Supabase 설정과 정책을 확인해주세요.");
+      showToast("자료 이전에 실패했습니다. 설정을 확인해주세요.");
+    }
+    return false;
   } finally {
-    migrateCloudDataButton.disabled = false;
+    if (!silent) setButtonBusy(migrateCloudDataButton, false);
   }
 }
 
@@ -613,15 +725,17 @@ function canDelete(record) {
   return session?.role === "admin" || (session?.role === "uploader" && record.owner === session.name);
 }
 
+function compareRecordsByUploadOrder(left, right) {
+  const leftTime = new Date(left.createdAt || 0).getTime();
+  const rightTime = new Date(right.createdAt || 0).getTime();
+  const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
+  const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
+  if (safeLeftTime !== safeRightTime) return safeLeftTime - safeRightTime;
+  return String(left.id || "").localeCompare(String(right.id || ""));
+}
+
 function createRecordSequenceMap() {
-  const orderedRecords = [...records].sort((left, right) => {
-    const leftTime = new Date(left.createdAt || 0).getTime();
-    const rightTime = new Date(right.createdAt || 0).getTime();
-    const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
-    const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
-    if (safeLeftTime !== safeRightTime) return safeLeftTime - safeRightTime;
-    return String(left.id || "").localeCompare(String(right.id || ""));
-  });
+  const orderedRecords = [...records].sort(compareRecordsByUploadOrder);
 
   return new Map(orderedRecords.map((record, index) => [record.id, index + 1]));
 }
@@ -634,7 +748,7 @@ function recordCard(record, sequenceNumber) {
       <div class="record-cell record-index" data-label="구분">${String(sequenceNumber).padStart(2, "0")}</div>
       <div class="record-cell record-date" data-label="올린 날짜">${escapeHtml(formatUploadedDate(record))}</div>
       <div class="record-cell record-passage" data-label="묵상일시 및 범위">${escapeHtml(formatMeditationRange(record))}</div>
-      <div class="record-cell record-owner" data-label="등록자">관리자</div>
+      <div class="record-cell record-owner" data-label="등록자">${escapeHtml(record.owner || "관리자")}</div>
       <div class="record-cell record-status" data-label="조회수"><span class="record-view-count">${viewCount}</span>${newBadge}</div>
     </article>`;
 }
@@ -642,6 +756,7 @@ function recordCard(record, sequenceNumber) {
 function renderRecords() {
   const query = searchInput.value.trim().toLowerCase();
   const scope = searchScope.value;
+  const direction = sortOrder?.value === "newest" ? -1 : 1;
   const sequenceById = createRecordSequenceMap();
   const visible = records.filter((record) => {
     const titleText = [record.title, record.passage, formatMeditationRange(record)]
@@ -651,10 +766,15 @@ function renderRecords() {
     const bodyText = String(record.summary || "").toLowerCase();
     const text = scope === "title" ? titleText : scope === "body" ? bodyText : `${titleText} ${bodyText}`;
     return !query || text.includes(query);
-  });
+  }).sort((left, right) => compareRecordsByUploadOrder(left, right) * direction);
+  if (resultCount) {
+    resultCount.innerHTML = query
+      ? `<b>${visible.length}</b> / ${records.length}건`
+      : `<b>${visible.length}</b>건`;
+  }
   recordList.innerHTML = visible.length
     ? visible.map((record) => recordCard(record, sequenceById.get(record.id) || 1)).join("")
-    : `<div class="empty-state"><strong>${records.length ? "조건에 맞는 자료가 없어요" : "아직 등록된 묵상 자료가 없어요"}</strong>${records.length ? "검색어를 바꿔보세요." : "관리자가 첫 번째 AI 정리 파일을 등록하면 여기에 표시됩니다."}</div>`;
+    : `<div class="empty-state"><strong>${records.length ? "조건에 맞는 자료가 없어요" : "아직 등록된 묵상 자료가 없어요"}</strong>${records.length ? "검색어나 검색 범위를 바꿔보세요." : "관리자가 첫 번째 묵상 자료를 등록하면 여기에 표시됩니다."}</div>`;
 }
 
 function closeDetailEditor() {
@@ -685,7 +805,7 @@ async function openRecordDetail(recordId, { countView = true } = {}) {
   closeDetailEditor();
   document.querySelector("#detail-date").textContent = formatUploadedDate(record);
   document.querySelector("#detail-passage").textContent = `${formatDate(record.meetingDate)}\n${record.passage || "범위 미지정"}`;
-  document.querySelector("#detail-owner").textContent = "관리자";
+  document.querySelector("#detail-owner").textContent = record.owner || "관리자";
   document.querySelector("#detail-file").textContent = record.fileName || "등록 파일 없음";
   detailDownloadButton.disabled = !record.fileName;
   detailDownloadButton.setAttribute("aria-label", record.fileName ? `${record.fileName} 다운로드` : "등록 파일 없음");
@@ -982,14 +1102,19 @@ memberForm.addEventListener("submit", async (event) => {
     role: role === "admin" ? "admin" : "member",
     createdAt: new Date().toISOString(),
   };
+  const submitButton = memberForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitButton, true, "등록 중…");
   try {
     await addMemberData(member);
     memberForm.reset();
     renderMembers();
+    setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
     showToast(`${name}님을 새 멤버로 등록했습니다.`);
   } catch (error) {
     console.error("Member save failed", error);
     showToast("멤버를 등록하지 못했습니다. 다시 시도해주세요.");
+  } finally {
+    setButtonBusy(submitButton, false);
   }
 });
 
@@ -1068,6 +1193,7 @@ document.querySelectorAll("[data-view-link]").forEach((button) => {
 document.querySelector("#logout-button").addEventListener("click", leaveApp);
 searchInput.addEventListener("input", renderRecords);
 searchScope.addEventListener("change", renderRecords);
+sortOrder.addEventListener("change", renderRecords);
 window.addEventListener("scroll", updateBackToTopVisibility, { passive: true });
 backToTopButton.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 
@@ -1085,6 +1211,7 @@ document.querySelector("#detail-edit-cancel").addEventListener("click", closeDet
 detailDownloadButton.addEventListener("click", async () => {
   const record = records.find((item) => item.id === currentDetailRecordId);
   if (!record) return;
+  setButtonBusy(detailDownloadButton, true, "다운로드 중…");
   try {
     const file = await getFile(record.id);
     if (!file) {
@@ -1100,8 +1227,11 @@ detailDownloadButton.addEventListener("click", async () => {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
     showToast("파일 다운로드를 시작했습니다.");
-  } catch {
+  } catch (error) {
+    console.error("File download failed", error);
     showToast("파일을 다운로드하지 못했습니다. 다시 시도해주세요.");
+  } finally {
+    setButtonBusy(detailDownloadButton, false);
   }
 });
 
@@ -1120,6 +1250,8 @@ deleteRecordForm.addEventListener("submit", async (event) => {
   const recordId = pendingDeleteRecordId;
   const record = records.find((item) => item.id === recordId);
   if (!record) return;
+  const submitButton = deleteRecordForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitButton, true, "삭제 중…");
   try {
     await removeRecordData(record);
     pendingDeleteRecordId = null;
@@ -1127,9 +1259,13 @@ deleteRecordForm.addEventListener("submit", async (event) => {
     deleteRecordDialog.close();
     renderRecords();
     switchView("library");
+    setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
     showToast("자료를 삭제했습니다.");
-  } catch {
+  } catch (error) {
+    console.error("Record delete failed", error);
     showToast("자료를 삭제하지 못했습니다. 다시 시도해주세요.");
+  } finally {
+    setButtonBusy(submitButton, false);
   }
 });
 
@@ -1147,6 +1283,8 @@ detailEditForm.addEventListener("submit", async (event) => {
   if (replacementFile && !validateUpload(replacementFile)) return;
   const meetingDate = detailEditDate.value;
   const passage = detailEditPassage.value.trim();
+  const submitButton = detailEditForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitButton, true, "저장 중…");
   try {
     const contentHtml = await prepareEditorHtmlForSave(detailRichEditor);
     const existingAsset = await getRecordAsset(record.id);
@@ -1162,14 +1300,21 @@ detailEditForm.addEventListener("submit", async (event) => {
     await saveRecordData(record, replacementFile || existingAsset?.file || null, contentHtml);
     renderRecords();
     await openRecordDetail(record.id, { countView: false });
+    setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
     showToast("수정 내용을 저장했습니다.");
-  } catch {
+  } catch (error) {
+    console.error("Record update failed", error);
     showToast("수정 내용을 저장하지 못했습니다. 다시 시도해주세요.");
+  } finally {
+    setButtonBusy(submitButton, false);
   }
 });
 
 setupRichEditor(richEditor, editorToolbar, editorImageInput, insertEditorImageButton);
 setupRichEditor(detailRichEditor, detailEditorToolbar, detailEditorImageInput, detailInsertEditorImageButton);
+
+uploadForm.addEventListener("input", () => { uploadFormDirty = true; });
+uploadForm.addEventListener("change", () => { uploadFormDirty = true; });
 
 fileInput.addEventListener("change", () => {
   const file = fileInput.files[0];
@@ -1197,12 +1342,18 @@ uploadForm.addEventListener("submit", async (event) => {
   if (!hasUploadPermission()) return;
   const data = new FormData(uploadForm);
   const file = fileInput.files[0];
-  if (!file || !validateUpload(file)) return;
+  if (file && !validateUpload(file)) return;
 
   const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
   const meetingDate = String(data.get("meetingDate") || "");
   const passage = String(data.get("passage") || "").trim();
   const summaryText = richEditor.innerText.trim();
+  const hasVisualContent = Boolean(richEditor.querySelector("img, table, svg"));
+  if (!passage && !summaryText && !hasVisualContent && !file) {
+    showToast("나눔범위나 본문 내용을 입력해주세요.");
+    richEditor.focus();
+    return;
+  }
   const record = {
     id,
     title: `${passage || "묵상 나눔"} · ${formatDate(meetingDate)}`,
@@ -1211,14 +1362,16 @@ uploadForm.addEventListener("submit", async (event) => {
     passage,
     visibility: "church",
     summary: summaryText.slice(0, 50000),
-    fileName: file.name,
-    fileType: file.type,
-    fileSize: file.size,
+    fileName: file?.name || "",
+    fileType: file?.type || "",
+    fileSize: file?.size || 0,
     owner: session.name,
     createdAt: new Date().toISOString(),
     viewCount: 0,
   };
 
+  const submitButton = uploadForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitButton, true, "등록 중…");
   try {
     const contentHtml = await prepareEditorHtmlForSave(richEditor);
     await saveRecordData(record, file, contentHtml, { isNew: true });
@@ -1226,11 +1379,16 @@ uploadForm.addEventListener("submit", async (event) => {
     richEditor.innerHTML = "";
     uploadForm.elements.meetingDate.value = localDateValue();
     showSelectedFile(null);
+    uploadFormDirty = false;
     renderRecords();
     switchView("library");
+    setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
     showToast("승인된 구성원이 볼 수 있도록 자료를 등록했어요.");
-  } catch {
-    showToast("파일 저장 중 문제가 생겼어요. 다시 시도해주세요.");
+  } catch (error) {
+    console.error("Record save failed", error);
+    showToast("자료 저장 중 문제가 생겼어요. 다시 시도해주세요.");
+  } finally {
+    setButtonBusy(submitButton, false);
   }
 });
 
@@ -1248,30 +1406,37 @@ recordList.addEventListener("keydown", (event) => {
 });
 
 migrateCloudDataButton.addEventListener("click", migrateLocalDataToCloud);
+syncRefreshButton.addEventListener("click", () => refreshCloudData({ announce: true }));
 
-window.addEventListener("focus", async () => {
-  if (!cloudEnabled || !session || document.visibilityState !== "visible") return;
-  try {
-    await loadCloudState();
-    renderRecords();
-    renderMembers();
-  } catch (error) {
-    console.error("Cloud refresh failed", error);
-  }
+window.addEventListener("focus", () => {
+  if (session && document.visibilityState === "visible") refreshCloudData();
+});
+document.addEventListener("visibilitychange", () => {
+  if (session && document.visibilityState === "visible") refreshCloudData();
+});
+window.addEventListener("online", () => refreshCloudData({ announce: Boolean(session) }));
+window.addEventListener("offline", () => setSyncState("offline", "오프라인"));
+window.addEventListener("beforeunload", (event) => {
+  if (!uploadFormDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 
 async function initializeApp() {
   uploadForm.elements.meetingDate.value = localDateValue();
   updateCloudSyncPanel();
   if (cloudEnabled) {
-    try {
-      await loadCloudState();
-      updateCloudSyncPanel();
-    } catch (error) {
-      console.error("Cloud initialization failed", error);
-      updateCloudSyncPanel("공유 저장소에 연결하지 못했습니다. cloud-config.js와 Supabase SQL 설정을 확인해주세요.");
+    const migrationDone = localStorage.getItem(cloudMigrationKey) === "done";
+    if (!migrationDone && hasLocalSnapshotAtStartup) {
+      await migrateLocalDataToCloud({ silent: true });
+    }
+    const connected = await refreshCloudData();
+    if (!connected) {
+      updateCloudSyncPanel("공유 저장소에 연결하지 못했습니다. 네트워크와 Supabase 설정을 확인해주세요.");
       showToast("공유 저장소 연결에 실패해 자료를 불러오지 못했습니다.");
     }
+  } else {
+    setSyncState("local", "이 기기에 저장 중");
   }
   restoreRememberedName();
   if (session) enterApp();
