@@ -1,11 +1,11 @@
-import * as ort from './assets/tts/runtime/ort.wasm.min.mjs';
+import { ort, wasmBase, modelBase } from './voice-runtime.mjs';
 import { TextToSpeech, UnicodeProcessor, loadVoiceStyle, writeWavFile } from './assets/tts/helper.mjs';
 const threads = self.crossOriginIsolated ? Math.min(4, Math.max(1, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1;
 ort.env.wasm.numThreads = threads;
-ort.env.wasm.wasmPaths = new URL('./assets/tts/runtime/', import.meta.url).href;
+ort.env.wasm.wasmPaths = wasmBase;
 let enginePromise, epoch = 0, queue = Promise.resolve();
 const styles = new Map();
-const base = new URL('./assets/tts/model/', import.meta.url).href;
+const base = modelBase;
 const cacheName = 'qt-supertonic3-aafc6e3-v1';
 
 async function modelBytes(path, id) {
@@ -15,7 +15,7 @@ async function modelBytes(path, id) {
   const cached = await cache?.match(url);
   if (cached) return cached.arrayBuffer();
   const response = await fetch(url);
-  if (!response.ok) throw new Error('Model unavailable');
+  if (!response.ok) throw new Error(`Model download failed: ${path} (HTTP ${response.status})`);
   const copy = response.clone(), total = Number(response.headers.get('content-length'));
   const reader = response.body.getReader(), parts = [];
   let loaded = 0, lastPercent = -1;
@@ -23,9 +23,9 @@ async function modelBytes(path, id) {
     const { value, done } = await reader.read();
     if (done) break;
     parts.push(value); loaded += value.byteLength;
-    const percent = total ? Math.round(loaded / total * 100) : 0;
+    const percent = total ? Math.round(loaded / total * 100) : Math.floor(loaded / 1048576);
     if (percent !== lastPercent) {
-      self.postMessage({ id, type: 'progress', message: `AI 목소리 준비 중 · ${path.split('/').pop()} ${percent}%` });
+      self.postMessage({ id: -1, type: 'progress', message: `목소리 파일을 내려받고 있습니다 · ${total ? percent + '%' : percent + ' MB'}` });
       lastPercent = percent;
     }
   }
@@ -44,7 +44,7 @@ async function loadEngine(id) {
   const sessions = [];
   try {
     for (const name of ['duration_predictor', 'text_encoder', 'vector_estimator', 'vocoder']) {
-      self.postMessage({ id, type: 'progress', message: `AI 목소리 준비 중 · ${sessions.length + 1} / 4` });
+      self.postMessage({ id: -1, type: 'progress', message: `목소리 준비 중 · ${sessions.length + 1} / 4` });
       sessions.push(await ort.InferenceSession.create(await modelBytes(`onnx/${name}.onnx`, id), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }));
     }
     return new TextToSpeech(cfg, processor, ...sessions);
@@ -71,7 +71,7 @@ async function synthesize(job) {
   } catch (error) {
     if (job.epoch === epoch) {
       console.error('Local AI voice failed:', error.message);
-      self.postMessage({ id: job.id, type: 'error', message: 'AI 음성을 만들지 못했습니다. 메모리가 부족하면 다른 탭을 닫고 다시 시도해주세요.' });
+      self.postMessage({ id: job.id, type: 'error', message: '음성 파일을 불러오거나 실행하지 못했습니다. 인터넷 연결을 확인하고 다른 탭을 닫은 뒤 다시 시도해주세요.' });
     }
   }
 }
@@ -86,3 +86,4 @@ self.onmessage = ({ data }) => {
   epoch = data.epoch;
   queue = queue.then(() => synthesize(data));
 };
+

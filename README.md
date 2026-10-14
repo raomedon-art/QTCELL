@@ -93,7 +93,9 @@ python -m http.server 8765 --bind 127.0.0.1
 
 모델 파일이 없는 새 설치에서는 PowerShell에서 `./install-voice-model.ps1`을 실행합니다. 공식 저장소에서 고정 버전을 내려받고 ONNX 파일의 LFS SHA-256과 대조합니다. PC 가속을 설치하려면 `python -m pip install --target native-deps -r requirements-voice.txt`를 실행한 뒤 `python serve.py`로 실행합니다. 네이티브 실행용 `native_voice.py`, `supertonic_helper.py`도 필요합니다. 이 로컬 서버는 127.0.0.1:8765에만 바인딩하며 COOP same-origin / COEP credentialless 헤더로 WASM 멀티스레드를 활성화합니다. 기존 단순 HTTP 서버는 단일 스레드로만 동작합니다. HTTPS 또는 localhost의 최신 Chrome/Edge를 권장합니다. 첫 초기화와 합성 시간은 기기 성능에 따라 달라집니다.
 
-공개 사이트 배포 시에는 전체 `assets/tts/`도 접근 가능해야 합니다. 대형 ONNX 파일은 일반 GitHub 파일 제한을 넘으므로 GitHub Pages에 코드만 올리면 재생되지 않습니다. 모델 파일을 별도 정적 파일 호스팅에서 제공하도록 배포 구성을 추가해야 합니다. 현재 적용 범위는 로컬 사이트입니다.
+GitHub Pages에서는 `voice-runtime.mjs`가 ONNX Runtime Web 1.30.0의 WASM 바이너리를 jsDelivr에서, 모델을 공식 Hugging Face 저장소의 고정 revision에서 직접 불러옵니다. `voice-worker.mjs`, `voice-runtime.mjs`, `assets/tts/helper.mjs`, `assets/tts/runtime/`의 두 `.mjs` 파일과 라이선스 파일을 코드와 함께 배포해야 합니다. 대형 ONNX 파일을 GitHub 저장소에 올리거나 Python 서버를 실행할 필요가 없습니다. 외부 요청은 실행 파일·모델 다운로드이며 본문 합성은 방문자의 브라우저에서 처리합니다. 공개 사이트는 로컬 전용 `/api/voice`를 호출하지 않습니다.
+
+최초 사용 시 약 412MB 다운로드와 초기화가 필요하며 다운로드 진행 상황을 표시합니다. 준비 제한 시간은 10분입니다. 모델과 생성 음성을 브라우저에 저장하여 다음 사용 때 재사용합니다. GitHub Pages는 기본적으로 단일 WASM 스레드로 실행되므로 로컬 PC 가속보다 느릴 수 있습니다. 외부 배포처가 차단된 네트워크에서는 파일을 불러올 수 없습니다. localhost에서는 기존 설치된 로컬 실행 파일·모델과 PC 가속을 그대로 사용합니다.
 
 ### 모델과 이용 조건
 
@@ -107,3 +109,4 @@ python -m http.server 8765 --bind 127.0.0.1
 현재 이름 입력 방식은 화면용 간편 입장으로, 실제 사용자 인증이 아닙니다. 제공된 SQL 정책은 기존 UI를 유지하면서 기기 간 공유를 먼저 해결하기 위한 구성입니다. 교회 내부의 민감한 자료를 실제 운영할 때는 Supabase Auth 개인 계정과 `authenticated` 전용 RLS 정책으로 바꿔야 합니다.
 
 PC 실행 코드는 같은 고정된 Supertonic 소스의 `py/helper.py`를 사용하며 MIT 라이선스가 적용됩니다. ONNX Runtime은 MIT이며 설치 패키지의 라이선스 파일을 함께 보관합니다. 로컬 API는 본문이나 생성 음성을 로그에 남기지 않고 응답을 저장하지 않으며, 기존 브라우저 IndexedDB 캐시를 재사용합니다.
+

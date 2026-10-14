@@ -59,8 +59,12 @@
   }
   function ensureWorker() {
     if (worker) return;
-    worker = new Worker('./voice-worker.mjs?v=20261014-fast-2', { type: 'module' });
+    worker = new Worker('./voice-worker.mjs?v=20261014-pages-1', { type: 'module' });
     worker.onmessage = ({ data }) => {
+      if (data.id === -1 && data.type === 'progress') {
+        for (const waiting of pending.values()) waiting.onProgress?.(data.message);
+        return;
+      }
       const job = pending.get(data.id);
       if (!job) return;
       if (data.type === 'progress') { job.onProgress?.(data.message); return; }
@@ -75,6 +79,7 @@
   }
   async function nativeAvailable() {
     if (typeof fetch !== 'function') return false;
+    if (globalThis.location && !['localhost', '127.0.0.1', '[::1]'].includes(globalThis.location.hostname)) return false;
     backendProbe ||= fetch('./api/voice/status', { signal: AbortSignal.timeout(2500) })
       .then(response => response.ok ? response.json() : null).then(info => !!info?.available).catch(() => false);
     return backendProbe;
@@ -114,7 +119,7 @@
     if (inFlight.has(key)) return inFlight.get(key);
     ensureWorker(); const id = ++requestId;
     const promise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => failJobs('AI 음성 준비 시간이 길어졌습니다. 다른 탭을 닫고 다시 시도해주세요.'), 180000);
+      const timeout = setTimeout(() => failJobs('음성 준비 시간이 길어졌습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.'), 600000);
       pending.set(id, { timeout, onProgress, reject, resolve: blob => {
         cache.set(key, blob);
         while (cache.size > 12) cache.delete(cache.keys().next().value);
@@ -256,3 +261,4 @@
   });
   render();
 })();
+
