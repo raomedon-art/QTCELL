@@ -14,6 +14,8 @@
   const pending = new Map(), cache = new Map(), inFlight = new Map();
   const nativeRequests = new Set();
   let backendProbe;
+  let recordSource = null;
+  const shared = new Map();
   const sample = '말씀을 함께 나누는 시간입니다. 오늘의 묵상을 차분하게 들어보세요.';
 
   function render(message) {
@@ -35,7 +37,7 @@
       : state === 'paused' ? '일시정지했습니다. 이어 듣기를 누르면 멈춘 곳부터 재생합니다.'
       : !supported ? 'AI 음성 재생을 지원하는 최신 Chrome 또는 Edge에서 열어주세요.'
       : !chunks.length ? '읽을 텍스트가 없습니다. 이미지와 첨부 파일의 글은 읽지 않습니다.'
-      : '앞부분이 준비되면 먼저 재생하고, 듣는 동안 뒤의 음성을 준비합니다. 저장된 음성은 바로 재생됩니다.');
+      : '본문 듣기를 누르면 준비된 음성으로 이어서 재생합니다.');
   }
   function cancelJobs() {
     for (const request of nativeRequests) request.abort();
@@ -133,8 +135,14 @@
   }
   async function playClip(token, track) {
     if (token !== generation) return;
-    clearClip(); clipUrl = URL.createObjectURL(track.blob); clip = new Audio(clipUrl);
+    clearClip();
+    if (track.blob) clipUrl = URL.createObjectURL(track.blob);
+    clip = new Audio(track.url || clipUrl); clip.preload = 'auto';
+    panel.dataset.bufferWaits = '0';
     clip.playbackRate = Number(rate.value) || 0.9; clip.preservesPitch = true;
+    clip.onwaiting = () => {
+      if (token === generation && startedPlayback && clip.currentTime > 0.05) panel.dataset.bufferWaits = String(Number(panel.dataset.bufferWaits) + 1);
+    };
     clip.ontimeupdate = () => {
       if (token !== generation || previewing) return;
       const next = track.ends.findIndex(end => end > clip.currentTime);
@@ -152,6 +160,36 @@
     try { await clip.play(); if (token !== generation) return; startedPlayback = true; state = 'playing'; render(); }
     catch { if (token === generation) { state = 'paused'; render('음성이 준비되었습니다. 이어 듣기를 눌러 재생해주세요.'); } }
   }
+  async function sharedTrack(isPreview, selectedVoice, selectedStyle) {
+    const source = recordSource;
+    if (!source?.storage) return null;
+    const raw = isPreview ? sample : source.content;
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+    const hash = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+    const base = `audio/v1/${isPreview ? 'preview' : source.id}/${hash}/${selectedVoice}`;
+    const cacheKey = base + '/' + selectedStyle;
+    const cached = shared.get(cacheKey);
+    if (cached?.expires > Date.now()) return cached.promise;
+    const promise = (async () => {
+      // Sign the small cue sheet and audio together. Audio itself is streamed by
+      // the media element; never wait for its full download or start a Worker.
+      const paths = [base + '/manifest.json', base + '/' + selectedStyle + '.ogg'];
+      const { data, error } = await source.storage.createSignedUrls(paths, 86400);
+      if (error || !data?.[0]?.signedUrl || !data?.[1]?.signedUrl) return null;
+      const response = await fetch(data[0].signedUrl, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return null;
+      const manifest = await response.json(), track = manifest.tracks?.[selectedStyle];
+      if (manifest.version !== 1 || manifest.sourceHash !== hash || manifest.voice !== selectedVoice
+        || !Array.isArray(manifest.chunks) || !manifest.chunks.length || !track
+        || track.path !== paths[1] || track.ends?.length !== manifest.chunks.length
+        || !track.ends.every((end, i) => Number.isFinite(end) && end > (i ? track.ends[i - 1] : 0))
+        || !manifest.chunks.every(chunk => typeof chunk.text === 'string' && chunk.text.trim())) return null;
+      return { url: data[1].signedUrl, ends: track.ends, chunks: manifest.chunks };
+    })().catch(() => null);
+    shared.set(cacheKey, { promise, expires: Date.now() + 23 * 60 * 60 * 1000 });
+    promise.then(result => { if (!result && shared.get(cacheKey)?.promise === promise) shared.delete(cacheKey); });
+    return promise;
+  }
   async function prepareAndPlay(token) {
     if (token !== generation) return;
     const selectedVoice = voice.value, selectedStyle = style.value;
@@ -159,6 +197,16 @@
     preparingTotal = selectedChunks.length; prepared = 0; beganAt = performance.now();
     state = 'loading'; render('저장된 음성을 확인하고 있습니다.');
     try {
+      const ready = await sharedTrack(previewing, selectedVoice, selectedStyle);
+      if (token !== generation) return;
+      if (ready) {
+        if (!previewing) { chunks = ready.chunks; readingHighlight?.refresh(chunks); }
+        preparingTotal = ready.chunks.length; prepared = preparingTotal;
+        panel.dataset.voiceEngine = 'shared-audio';
+        await playClip(token, ready);
+        if (token === generation) panel.dataset.startupMs = String(Math.round(performance.now() - beganAt));
+        return;
+      }
       const key = await trackStore.key('track', JSON.stringify([selectedVoice, selectedStyle, selectedChunks]));
       if (token !== generation) return;
       const stored = lastTrack?.key === key ? lastTrack.track : await trackStore.get(key);
@@ -240,19 +288,29 @@
   preview.addEventListener('click', () => { stop(); previewing = true; prepareAndPlay(generation); });
   stopButton.addEventListener('click', () => stop('듣기를 멈췄습니다. 준비된 부분은 저장되어 다음 준비에 재사용합니다.'));
   rate.addEventListener('change', () => { stream?.setRate(Number(rate.value) || 0.9); if (clip) clip.playbackRate = Number(rate.value) || 0.9; });
-  voice.addEventListener('change', () => stop('목소리를 바꿨습니다. 미리 듣기로 확인해보세요.'));
+  function prefetchShared() {
+    if (chunks.length) sharedTrack(false, voice.value, style.value);
+    sharedTrack(true, voice.value, style.value);
+  }
+  voice.addEventListener('change', () => { stop('목소리를 바꿨습니다. 미리 듣기로 확인해보세요.'); prefetchShared(); });
+  style.addEventListener('change', () => { stop(); prefetchShared(); });
   window.addEventListener('pagehide', () => { stop(); worker?.terminate(); worker = null; cache.clear(); });
   window.QTReader = Object.freeze({
     stop,
-    refresh(hasContent) { stop(); chunks = hasContent ? window.QTVoiceText.splitText(summary.innerText) : []; readingHighlight?.refresh(chunks); cache.clear(); render();
+    refresh(hasContent, source = null) { stop(); recordSource = source; chunks = hasContent ? window.QTVoiceText.splitText(summary.innerText) : []; readingHighlight?.refresh(chunks); cache.clear(); render();
       if (supported && chunks.length) {
         const token = generation;
         warmTimer = setTimeout(async () => {
           try {
+            const ready = await sharedTrack(false, voice.value, style.value);
+            if (token !== generation) return;
+            if (ready) { panel.dataset.voiceEngine = 'shared-audio'; render('음성이 준비되어 있습니다. 본문 듣기를 눌러보세요.'); return; }
             const key = await trackStore.key('track', JSON.stringify([voice.value, style.value, chunks]));
             const saved = lastTrack?.key === key || await trackStore.get(key);
             const native = await nativeAvailable();
-            if (token === generation && !saved && !native) { ensureWorker(); worker.postMessage({ type: 'warmup' }); }
+            // Public readers must not download 412 MB merely by opening a page.
+            // The local generation fallback is started only by an explicit play.
+            if (token === generation && !saved && !native && !recordSource?.storage) { ensureWorker(); worker.postMessage({ type: 'warmup' }); }
           } catch { /* Warmup is optional; listening can retry. */ }
         }, 350);
       }
