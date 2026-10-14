@@ -59,7 +59,7 @@
   }
   function ensureWorker() {
     if (worker) return;
-    worker = new Worker('./voice-worker.mjs?v=20261014-pages-1', { type: 'module' });
+    worker = new Worker('./voice-worker.mjs?v=20261014-bundled-2', { type: 'module' });
     worker.onmessage = ({ data }) => {
       if (data.id === -1 && data.type === 'progress') {
         for (const waiting of pending.values()) waiting.onProgress?.(data.message);
