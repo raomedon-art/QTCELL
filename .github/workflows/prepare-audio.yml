@@ -44,9 +44,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install onnxruntime==1.23.2 numpy==2.2.6
+      - run: python -m pip install onnxruntime==1.23.2 numpy==2.2.6 imageio-ffmpeg==0.6.0
       - name: Prepare continuous audio and publish to the existing private bucket
         env:
           RECORD_ID: ${{ matrix.id }}
           VOICE: ${{ matrix.voice }}
-        run: python -u prepare-audio.py --id "$RECORD_ID" --voice "$VOICE"
+        run: |
+          export FFMPEG="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          "$FFMPEG" -version
+          python -u prepare-audio.py --id "$RECORD_ID" --voice "$VOICE"
