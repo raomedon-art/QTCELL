@@ -15,6 +15,7 @@
   const nativeRequests = new Set();
   let backendProbe;
   let recordSource = null;
+  let primed = null;
   const shared = new Map();
   const sample = '말씀을 함께 나누는 시간입니다. 오늘의 묵상을 차분하게 들어보세요.';
 
@@ -47,8 +48,35 @@
     pending.clear(); inFlight.clear();
   }
   function clearClip() {
-    if (clip) { clip.onended = clip.onerror = clip.ontimeupdate = null; clip.pause(); clip.removeAttribute('src'); clip.load(); clip = null; }
+    if (clip) { clip.onended = clip.onerror = clip.ontimeupdate = clip.onwaiting = clip.onplaying = null; clip.pause(); clip.removeAttribute('src'); clip.load(); clip = null; }
     if (clipUrl) { URL.revokeObjectURL(clipUrl); clipUrl = null; }
+  }
+  function clearPrime() {
+    if (primed) { primed.audio.pause(); primed.audio.removeAttribute('src'); primed.audio.load(); primed = null; }
+  }
+  function primeTrack(track) {
+    if (!track?.url || primed?.url === track.url) return;
+    clearPrime(); const audio = new Audio(track.url); audio.preload = 'auto'; audio.load();
+    primed = { url: track.url, audio };
+  }
+  async function initialBuffer(audio, token) {
+    if (typeof audio.addEventListener !== 'function') return;
+    await new Promise(resolve => {
+      let timer;
+      const events = ['progress','canplay','canplaythrough','loadedmetadata'];
+      function done() {
+        clearTimeout(timer); events.forEach(event => audio.removeEventListener(event, check));
+        audio.removeEventListener('error', done); audio.removeEventListener('emptied', done); resolve();
+      }
+      function check() {
+        if (token !== generation) return done();
+        const target = Math.min(Number.isFinite(audio.duration) ? audio.duration : Infinity, 12 * (Number(rate.value) || 0.9));
+        if (audio.readyState >= 3 && audio.buffered.length && audio.buffered.end(0) >= target - 0.05) done();
+      }
+      events.forEach(event => audio.addEventListener(event, check));
+      audio.addEventListener('error', done); audio.addEventListener('emptied', done);
+      timer = setTimeout(done, 6000); check();
+    });
   }
   function stop(message) {
     generation++; clearTimeout(warmTimer); stream?.stop(); stream = null; cancelJobs(); clearClip();
@@ -137,14 +165,25 @@
     if (token !== generation) return;
     clearClip();
     if (track.blob) clipUrl = URL.createObjectURL(track.blob);
-    clip = new Audio(track.url || clipUrl); clip.preload = 'auto';
+    clip = track.url && primed?.url === track.url ? primed.audio : new Audio(track.url || clipUrl);
+    if (primed?.audio === clip) primed = null;
+    clip.preload = 'auto';
     panel.dataset.bufferWaits = '0';
+    panel.dataset.bufferWaitPositions = ''; panel.dataset.bufferWaitMs = '0';
+    let waitingSince = 0;
     clip.playbackRate = Number(rate.value) || 0.9; clip.preservesPitch = true;
     clip.onwaiting = () => {
-      if (token === generation && startedPlayback && clip.currentTime > 0.05) panel.dataset.bufferWaits = String(Number(panel.dataset.bufferWaits) + 1);
+      if (token === generation && startedPlayback && clip.currentTime > 0.05) {
+        panel.dataset.bufferWaits = String(Number(panel.dataset.bufferWaits) + 1);
+        panel.dataset.bufferWaitPositions += clip.currentTime.toFixed(2) + ','; waitingSince = performance.now();
+      }
+    };
+    clip.onplaying = () => {
+      if (token === generation && waitingSince) { panel.dataset.bufferWaitMs = String(Number(panel.dataset.bufferWaitMs) + Math.round(performance.now() - waitingSince)); waitingSince = 0; }
     };
     clip.ontimeupdate = () => {
       if (token !== generation || previewing) return;
+      panel.dataset.audioPosition = String(clip.currentTime);
       const next = track.ends.findIndex(end => end > clip.currentTime);
       const currentPosition = next === -1 ? chunks.length : next;
       if (position !== currentPosition) { position = currentPosition; render(); }
@@ -157,7 +196,11 @@
       state = 'idle'; render('본문을 모두 읽었습니다. 다시 누르면 준비된 음성으로 바로 재생합니다.');
     };
     clip.onerror = () => { if (token === generation) stop('생성한 음성을 재생하지 못했습니다. 다시 시도해주세요.'); };
-    try { await clip.play(); if (token !== generation) return; startedPlayback = true; state = 'playing'; render(); }
+    try {
+      if (track.url) await initialBuffer(clip, token);
+      if (token !== generation) return;
+      await clip.play(); if (token !== generation) return; startedPlayback = true; state = 'playing'; render();
+    }
     catch { if (token === generation) { state = 'paused'; render('음성이 준비되었습니다. 이어 듣기를 눌러 재생해주세요.'); } }
   }
   async function sharedTrack(isPreview, selectedVoice, selectedStyle) {
@@ -289,22 +332,23 @@
   stopButton.addEventListener('click', () => stop('듣기를 멈췄습니다. 준비된 부분은 저장되어 다음 준비에 재사용합니다.'));
   rate.addEventListener('change', () => { stream?.setRate(Number(rate.value) || 0.9); if (clip) clip.playbackRate = Number(rate.value) || 0.9; });
   function prefetchShared() {
-    if (chunks.length) sharedTrack(false, voice.value, style.value);
+    const token = generation;
+    if (chunks.length) sharedTrack(false, voice.value, style.value).then(track => { if (token === generation) primeTrack(track); });
     sharedTrack(true, voice.value, style.value);
   }
-  voice.addEventListener('change', () => { stop('목소리를 바꿨습니다. 미리 듣기로 확인해보세요.'); prefetchShared(); });
-  style.addEventListener('change', () => { stop(); prefetchShared(); });
-  window.addEventListener('pagehide', () => { stop(); worker?.terminate(); worker = null; cache.clear(); });
+  voice.addEventListener('change', () => { stop('목소리를 바꿨습니다. 미리 듣기로 확인해보세요.'); clearPrime(); prefetchShared(); });
+  style.addEventListener('change', () => { stop(); clearPrime(); prefetchShared(); });
+  window.addEventListener('pagehide', () => { stop(); clearPrime(); worker?.terminate(); worker = null; cache.clear(); });
   window.QTReader = Object.freeze({
     stop,
-    refresh(hasContent, source = null) { stop(); recordSource = source; chunks = hasContent ? window.QTVoiceText.splitText(summary.innerText) : []; readingHighlight?.refresh(chunks); cache.clear(); render();
+    refresh(hasContent, source = null) { stop(); clearPrime(); recordSource = source; chunks = hasContent ? window.QTVoiceText.splitText(summary.innerText) : []; readingHighlight?.refresh(chunks); cache.clear(); render();
       if (supported && chunks.length) {
         const token = generation;
         warmTimer = setTimeout(async () => {
           try {
             const ready = await sharedTrack(false, voice.value, style.value);
             if (token !== generation) return;
-            if (ready) { panel.dataset.voiceEngine = 'shared-audio'; render('음성이 준비되어 있습니다. 본문 듣기를 눌러보세요.'); return; }
+            if (ready) { primeTrack(ready); panel.dataset.voiceEngine = 'shared-audio'; render('음성이 준비되어 있습니다. 본문 듣기를 눌러보세요.'); return; }
             const key = await trackStore.key('track', JSON.stringify([voice.value, style.value, chunks]));
             const saved = lastTrack?.key === key || await trackStore.get(key);
             const native = await nativeAvailable();
@@ -315,7 +359,7 @@
         }, 350);
       }
     },
-    setEditing(editing) { if (editing) stop(); panel.hidden = editing; },
+    setEditing(editing) { if (editing) { stop(); clearPrime(); } panel.hidden = editing; },
   });
   render();
 })();
