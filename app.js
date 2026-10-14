@@ -883,7 +883,10 @@ async function openRecordDetail(recordId, { countView = true } = {}) {
   if (savedHtml) detailSummary.innerHTML = sanitizeEditorHtml(savedHtml);
   else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
   switchView("detail");
-  window.QTReader.refresh(Boolean(savedHtml || record.summary));
+  window.QTReader.refresh(Boolean(savedHtml || record.summary), {
+    id: record.id, content: savedHtml || record.summary || "",
+    storage: cloudEnabled ? cloudClient.storage.from(CLOUD_CONFIG.bucket) : null,
+  });
 }
 
 async function openDetailEditor() {
