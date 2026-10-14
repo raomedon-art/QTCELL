@@ -9,7 +9,7 @@
     <meta name="description" content="승인된 교회 구성원만 함께 보는 비공개 묵상 나눔 자료실" />
     <title>묵상셀 · 비공개 묵상 자료실</title>
     <link rel="icon" type="image/png" href="./assets/soyang-church-logo-cutout.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260827-9" />
+    <link rel="stylesheet" href="./styles.css?v=20261014-highlight-1" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">본문 바로가기</a>
@@ -141,6 +141,41 @@
               <div><span>등록자</span><strong id="detail-owner"></strong></div>
             </div>
             <section class="detail-content">
+              <section class="detail-reader" id="detail-reader" aria-label="본문 오디오 듣기" data-state="idle">
+                <div class="reader-heading">
+                  <strong>묵상 나눔, 음성으로 들어요.</strong>
+                </div>
+                <div class="reader-controls">
+                  <button class="button primary compact" id="reader-play" type="button" aria-controls="detail-summary" disabled>본문 듣기</button>
+                  <button class="button secondary compact" id="reader-stop" type="button" disabled>정지</button>
+                  <button class="button secondary compact" id="reader-preview" type="button">목소리 미리 듣기</button>
+                  <label class="reader-setting" for="reader-rate">읽기 속도
+                    <select id="reader-rate">
+                      <option value="0.75">0.75배</option>
+                      <option value="0.9" selected>0.9배 · 편안하게</option>
+                      <option value="1">1배</option>
+                      <option value="1.25">1.25배</option>
+                      <option value="1.5">1.5배</option>
+                    </select>
+                  </label>
+                  <label class="reader-setting" for="reader-style">읽기 방식
+                    <select id="reader-style">
+                      <option value="gentle" selected>부드럽게 · 쉬어 읽기</option>
+                      <option value="standard">기본 · 연속 읽기</option>
+                    </select>
+                  </label>
+                  <label class="reader-setting reader-voice-setting" for="reader-voice">목소리
+                    <select id="reader-voice">
+                      <option value="F1" selected>여성 목소리 1</option>
+                      <option value="F2">여성 목소리 2</option>
+                      <option value="M1">남성 목소리 1</option>
+                      <option value="M2">남성 목소리 2</option>
+                    </select>
+                  </label>
+                </div>
+                <progress id="reader-progress" value="0" max="1" aria-label="본문 듣기 진행률"></progress>
+                <p class="reader-status" id="reader-status" role="status" aria-live="polite" aria-atomic="true">앞부분이 준비되면 먼저 재생하고, 듣는 동안 뒤의 음성을 준비합니다.</p>
+              </section>
               <div class="rich-content" id="detail-summary"></div>
               <form class="detail-edit-form" id="detail-edit-form" hidden>
                 <div class="field-grid">
@@ -351,6 +386,11 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="./cloud-config.js?v=20260827-3"></script>
-    <script src="./app.js?v=20260827-18"></script>
+    <script src="./speech-text.js?v=20261014-ai-1"></script>
+    <script src="./audio-track.js?v=20261014-continuous-1"></script>
+    <script src="./reader-highlight.js?v=20261014-highlight-1"></script>
+    <script src="./reader-stream.js?v=20261014-highlight-1"></script>
+    <script src="./reader-ai.js?v=20261014-highlight-1"></script>
+    <script src="./app.js?v=20261014-audio-1"></script>
   </body>
 </html>

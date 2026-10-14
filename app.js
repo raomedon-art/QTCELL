@@ -363,6 +363,7 @@ function enterApp() {
 }
 
 function leaveApp() {
+  window.QTReader.stop();
   sessionStorage.removeItem(KEYS.session);
   session = null;
   adminUnlocked = false;
@@ -396,6 +397,7 @@ function switchView(viewName, { historyMode = "push", fromHistory = false } = {}
     viewName = "library";
   }
   if (["admin", "upload"].includes(viewName) && !adminUnlocked && !fromHistory) return;
+  if (viewName !== "detail") window.QTReader.stop();
   if (!["admin", "upload"].includes(viewName)) adminUnlocked = false;
   document.querySelectorAll("[data-view]").forEach((view) => {
     view.classList.toggle("is-active", view.dataset.view === viewName);
@@ -838,6 +840,7 @@ function renderRecords() {
 }
 
 function closeDetailEditor() {
+  window.QTReader.setEditing(false);
   detailEditForm.hidden = true;
   detailSummary.hidden = false;
   detailEditButton.hidden = false;
@@ -852,6 +855,7 @@ function normalizeDateInput(value) {
 async function openRecordDetail(recordId, { countView = true } = {}) {
   const record = records.find((item) => item.id === recordId);
   if (!record) return;
+  window.QTReader.stop();
   if (countView) {
     record.viewCount = Math.max(0, Number(record.viewCount) || 0) + 1;
     try {
@@ -869,21 +873,23 @@ async function openRecordDetail(recordId, { countView = true } = {}) {
   document.querySelector("#detail-file").textContent = record.fileName || "등록 파일 없음";
   detailDownloadButton.disabled = !record.fileName;
   detailDownloadButton.setAttribute("aria-label", record.fileName ? `${record.fileName} 다운로드` : "등록 파일 없음");
+  let savedHtml = record.contentHtml || "";
   try {
     const asset = await getRecordAsset(record.id);
-    const savedHtml = asset?.contentHtml || record.contentHtml || "";
-    if (savedHtml) detailSummary.innerHTML = sanitizeEditorHtml(savedHtml);
-    else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
+    savedHtml = asset?.contentHtml || savedHtml;
   } catch {
-    if (record.contentHtml) detailSummary.innerHTML = sanitizeEditorHtml(record.contentHtml);
-    else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
+    // Use the record's existing content if its attachment cannot be loaded.
   }
+  if (savedHtml) detailSummary.innerHTML = sanitizeEditorHtml(savedHtml);
+  else detailSummary.textContent = record.summary || "묵상 나눔 내용이 없습니다. ‘수정’을 눌러 내용을 작성해주세요.";
   switchView("detail");
+  window.QTReader.refresh(Boolean(savedHtml || record.summary));
 }
 
 async function openDetailEditor() {
   const record = records.find((item) => item.id === currentDetailRecordId);
   if (!record || !hasUploadPermission()) return;
+  window.QTReader.setEditing(true);
   detailEditDate.value = normalizeDateInput(record.meetingDate);
   detailEditPassage.value = record.passage || "";
   detailEditFile.value = "";

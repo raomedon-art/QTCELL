@@ -1,0 +1,258 @@
+(() => {
+  'use strict';
+  const $ = id => document.querySelector('#' + id);
+  const panel = $('detail-reader'), summary = $('detail-summary');
+  const readingHighlight = window.QTReadingHighlight ? new window.QTReadingHighlight(summary) : null;
+  const play = $('reader-play'), stopButton = $('reader-stop'), preview = $('reader-preview');
+  const rate = $('reader-rate'), style = $('reader-style'), voice = $('reader-voice');
+  const status = $('reader-status'), progress = $('reader-progress');
+  const supported = typeof Worker !== 'undefined' && typeof Audio !== 'undefined';
+  let chunks = [], position = 0, state = 'idle', generation = 0, workerEpoch = 0;
+  let worker, requestId = 0, clip, clipUrl, previewing = false;
+  let preparingTotal = 0, prepared = 0, lastTrack, stream, warmTimer, beganAt = 0, startedPlayback = false;
+  const trackStore = window.QTAudioTrack;
+  const pending = new Map(), cache = new Map(), inFlight = new Map();
+  const nativeRequests = new Set();
+  let backendProbe;
+  const sample = '말씀을 함께 나누는 시간입니다. 오늘의 묵상을 차분하게 들어보세요.';
+
+  function render(message) {
+    if (!previewing && startedPlayback && (state === 'playing' || state === 'paused')) readingHighlight?.show(position);
+    else readingHighlight?.clear();
+    const busy = ['loading','playing','paused'].includes(state);
+    play.disabled = !supported || (!chunks.length && !busy) || state === 'loading';
+    const label = state === 'loading' ? 'AI 음성 준비 중…' : state === 'playing' ? '일시정지' : state === 'paused' ? '이어 듣기' : '본문 듣기';
+    play.textContent = label;
+    play.setAttribute('aria-label', state === 'playing' ? '본문 듣기 일시정지' : state === 'paused' ? '본문 이어 듣기' : label);
+    stopButton.disabled = !busy; preview.disabled = !supported || busy; voice.disabled = !supported || busy; style.disabled = busy;
+    const total = state === 'loading' || previewing ? preparingTotal : chunks.length;
+    progress.max = Math.max(1, total);
+    progress.value = state === 'loading' ? prepared : position;
+    progress.setAttribute('aria-label', state === 'loading' ? '음성 준비 진행률' : '본문 듣기 진행률');
+    progress.setAttribute('aria-valuetext', state === 'loading' ? `${prepared} / ${preparingTotal} 구간 준비` : `${position} / ${total} 구간 완료`);
+    panel.dataset.state = state; panel.setAttribute('aria-busy', String(state === 'loading'));
+    status.textContent = message || (state === 'playing' ? (previewing ? 'AI 목소리 미리 듣는 중' : `재생 중 · ${Math.min(position + 1, chunks.length)} / ${chunks.length} 구간 · ${prepared < preparingTotal ? "뒤의 음성을 미리 준비하고 있습니다" : "음성 준비 완료"}`)
+      : state === 'paused' ? '일시정지했습니다. 이어 듣기를 누르면 멈춘 곳부터 재생합니다.'
+      : !supported ? 'AI 음성 재생을 지원하는 최신 Chrome 또는 Edge에서 열어주세요.'
+      : !chunks.length ? '읽을 텍스트가 없습니다. 이미지와 첨부 파일의 글은 읽지 않습니다.'
+      : '앞부분이 준비되면 먼저 재생하고, 듣는 동안 뒤의 음성을 준비합니다. 저장된 음성은 바로 재생됩니다.');
+  }
+  function cancelJobs() {
+    for (const request of nativeRequests) request.abort();
+    nativeRequests.clear();
+    workerEpoch++; worker?.postMessage({ type: 'cancel', epoch: workerEpoch });
+    for (const job of pending.values()) { clearTimeout(job.timeout); job.reject(new Error('cancelled')); }
+    pending.clear(); inFlight.clear();
+  }
+  function clearClip() {
+    if (clip) { clip.onended = clip.onerror = clip.ontimeupdate = null; clip.pause(); clip.removeAttribute('src'); clip.load(); clip = null; }
+    if (clipUrl) { URL.revokeObjectURL(clipUrl); clipUrl = null; }
+  }
+  function stop(message) {
+    generation++; clearTimeout(warmTimer); stream?.stop(); stream = null; cancelJobs(); clearClip();
+    state = 'idle'; position = 0; prepared = 0; preparingTotal = 0; previewing = false; startedPlayback = false; render(message);
+  }
+  function failJobs(message) {
+    worker?.terminate(); worker = null;
+    for (const job of pending.values()) { clearTimeout(job.timeout); job.reject(new Error(message)); }
+    pending.clear(); inFlight.clear();
+  }
+  function ensureWorker() {
+    if (worker) return;
+    worker = new Worker('./voice-worker.mjs?v=20261014-fast-2', { type: 'module' });
+    worker.onmessage = ({ data }) => {
+      const job = pending.get(data.id);
+      if (!job) return;
+      if (data.type === 'progress') { job.onProgress?.(data.message); return; }
+      clearTimeout(job.timeout); pending.delete(data.id);
+      if (data.type === 'result') {
+        panel.dataset.workerThreads = String(data.threads); panel.dataset.generationMs = String(Math.round(data.elapsedMs)); panel.dataset.audioSeconds = String(data.seconds);
+        job.resolve(new Blob([data.wav], { type: 'audio/wav' }));
+      }
+      else job.reject(new Error(data.message));
+    };
+    worker.onerror = () => failJobs('AI 음성 엔진을 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.');
+  }
+  async function nativeAvailable() {
+    if (typeof fetch !== 'function') return false;
+    backendProbe ||= fetch('./api/voice/status', { signal: AbortSignal.timeout(2500) })
+      .then(response => response.ok ? response.json() : null).then(info => !!info?.available).catch(() => false);
+    return backendProbe;
+  }
+  async function generate(text, onProgress) {
+    const key = voice.value + ':' + text, token = generation;
+    if (cache.has(key)) return cache.get(key);
+    const native = await nativeAvailable();
+    if (token !== generation) throw new Error('cancelled');
+    if (native) {
+      const controller = new AbortController(); nativeRequests.add(controller);
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      try {
+        onProgress?.('빠른 음성을 준비하고 있습니다.');
+        const response = await fetch('./api/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: voice.value }), signal: controller.signal });
+        if (!response.ok) throw new Error('native unavailable');
+        const blob = await response.blob();
+        if (token !== generation) throw new Error('cancelled');
+        panel.dataset.workerThreads = response.headers.get('X-Voice-Threads');
+        panel.dataset.generationMs = response.headers.get('X-Voice-Generation-Ms');
+        panel.dataset.audioSeconds = response.headers.get('X-Voice-Seconds');
+        panel.dataset.voiceEngine = 'native';
+        cache.set(key, blob); while (cache.size > 12) cache.delete(cache.keys().next().value);
+        return blob;
+      } catch (error) {
+        if (token !== generation) throw error;
+        backendProbe = Promise.resolve(false);
+      } finally { clearTimeout(timeout); nativeRequests.delete(controller); }
+    }
+    panel.dataset.voiceEngine = 'wasm';
+    return generateInWorker(text, onProgress);
+  }
+  function generateInWorker(text, onProgress) {
+    const key = voice.value + ':' + text;
+    if (cache.has(key)) return Promise.resolve(cache.get(key));
+    if (inFlight.has(key)) return inFlight.get(key);
+    ensureWorker(); const id = ++requestId;
+    const promise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => failJobs('AI 음성 준비 시간이 길어졌습니다. 다른 탭을 닫고 다시 시도해주세요.'), 180000);
+      pending.set(id, { timeout, onProgress, reject, resolve: blob => {
+        cache.set(key, blob);
+        while (cache.size > 12) cache.delete(cache.keys().next().value);
+        resolve(blob);
+      } });
+      worker.postMessage({ type: 'synthesize', id, epoch: workerEpoch, voice: voice.value, text });
+    });
+    inFlight.set(key, promise);
+    promise.then(() => { if (inFlight.get(key) === promise) inFlight.delete(key); }, () => { if (inFlight.get(key) === promise) inFlight.delete(key); });
+    return promise;
+  }
+  async function playClip(token, track) {
+    if (token !== generation) return;
+    clearClip(); clipUrl = URL.createObjectURL(track.blob); clip = new Audio(clipUrl);
+    clip.playbackRate = Number(rate.value) || 0.9; clip.preservesPitch = true;
+    clip.ontimeupdate = () => {
+      if (token !== generation || previewing) return;
+      const next = track.ends.findIndex(end => end > clip.currentTime);
+      const currentPosition = next === -1 ? chunks.length : next;
+      if (position !== currentPosition) { position = currentPosition; render(); }
+    };
+    clip.onended = () => {
+      if (token !== generation) return;
+      clearClip();
+      if (previewing) { stop('목소리 미리 듣기를 마쳤습니다. 본문 듣기를 눌러보세요.'); return; }
+      position = chunks.length;
+      state = 'idle'; render('본문을 모두 읽었습니다. 다시 누르면 준비된 음성으로 바로 재생합니다.');
+    };
+    clip.onerror = () => { if (token === generation) stop('생성한 음성을 재생하지 못했습니다. 다시 시도해주세요.'); };
+    try { await clip.play(); if (token !== generation) return; startedPlayback = true; state = 'playing'; render(); }
+    catch { if (token === generation) { state = 'paused'; render('음성이 준비되었습니다. 이어 듣기를 눌러 재생해주세요.'); } }
+  }
+  async function prepareAndPlay(token) {
+    if (token !== generation) return;
+    const selectedVoice = voice.value, selectedStyle = style.value;
+    const selectedChunks = previewing ? window.QTVoiceText.splitText(sample) : chunks;
+    preparingTotal = selectedChunks.length; prepared = 0; beganAt = performance.now();
+    state = 'loading'; render('저장된 음성을 확인하고 있습니다.');
+    try {
+      const key = await trackStore.key('track', JSON.stringify([selectedVoice, selectedStyle, selectedChunks]));
+      if (token !== generation) return;
+      const stored = lastTrack?.key === key ? lastTrack.track : await trackStore.get(key);
+      if (token !== generation) return;
+      if (stored) {
+        prepared = preparingTotal; lastTrack = { key, track: stored }; await playClip(token, stored);
+        if (token === generation) panel.dataset.startupMs = String(Math.round(performance.now() - beganAt));
+        return;
+      }
+      const joined = trackStore.builder();
+      const currentStream = stream = new window.QTAudioStream({
+        rate: Number(rate.value) || 0.9,
+        onState(next, message) {
+          if (token !== generation) return;
+          if (next === 'playing' && !startedPlayback) { startedPlayback = true; panel.dataset.startupMs = String(Math.round(performance.now() - beganAt)); }
+          state = next; render(message);
+        },
+        onPosition(next) { if (token === generation) { position = next; render(); } },
+        onComplete() {
+          if (token !== generation) return;
+          if (previewing) { stop('목소리 미리 듣기를 마쳤습니다. 본문 듣기를 눌러보세요.'); return; }
+          state = 'idle'; position = chunks.length; render('본문을 모두 읽었습니다. 준비한 음성은 다음에 재사용합니다.');
+        },
+        onError(message) { if (token === generation) stop(message); },
+      });
+      const writes = [];
+      for (let i = 0; i < selectedChunks.length; i++) {
+        while (!currentStream.stopped && currentStream.bufferedSeconds() >= 60) await currentStream.waitForRoom();
+        if (token !== generation || currentStream.stopped) return;
+        const chunk = selectedChunks[i];
+        const legacyKey = await trackStore.key('chunk', JSON.stringify([selectedVoice, chunk.text]));
+        const chunkKey = await trackStore.key('fast-chunk', JSON.stringify([selectedVoice, chunk.text, 5]));
+        if (token !== generation) return;
+        const cached = await trackStore.get(chunkKey) || await trackStore.get(legacyKey);
+        if (token !== generation) return;
+        let blob = cached?.blob;
+        if (!blob) {
+          const update = detail => {
+            if (token === generation && state === 'loading') render((startedPlayback ? '뒤의 음성 준비' : '앞부분 음성 준비') + ' · ' + prepared + ' / ' + preparingTotal + ' · ' + detail);
+          };
+          update('앞부분이 준비되면 먼저 재생합니다.');
+          blob = await generate(chunk.text, update);
+          if (token !== generation) return;
+          writes.push(trackStore.put(chunkKey, { blob }));
+        }
+        if (token !== generation) return;
+        const pause = i < selectedChunks.length - 1 && selectedStyle === 'gentle' ? Math.min(160, chunk.pause) : 0;
+        await joined.append(blob, pause);
+        const segmentBuilder = trackStore.builder(); await segmentBuilder.append(blob, pause);
+        if (token !== generation) return;
+        const segment = segmentBuilder.finish();
+        prepared = i + 1; currentStream.append(segment.blob, segment.duration);
+        // A short initial reserve; keep generating up to a minute ahead while listening.
+        const nativeKeepsUp = panel.dataset.voiceEngine === 'native' && Number(panel.dataset.generationMs) / 1000 < segment.duration * 0.85;
+        if (!currentStream.started && (i === selectedChunks.length - 1 || ((prepared >= 2 || nativeKeepsUp) && currentStream.bufferedSeconds() >= 6) || prepared >= 4)) currentStream.start();
+        if (state === 'loading') render('앞부분 음성 준비 · ' + prepared + ' / ' + preparingTotal + ' · 전체 완성을 기다리지 않고 재생합니다.');
+        else render();
+      }
+      if (token !== generation) return;
+      const track = joined.finish(); lastTrack = { key, track };
+      // Persistence must never delay playback or the next generated segment.
+      writes.push(trackStore.put(key, track));
+      currentStream.finish();
+      await Promise.allSettled(writes);
+    } catch (error) { if (token === generation) stop(error.message); }
+  }
+  play.addEventListener('click', async () => {
+    if (play.disabled) return;
+    if (state === 'playing') { if (stream) stream.pause(); else { clip?.pause(); state = 'paused'; render(); } return; }
+    if (state === 'paused' && stream) { stream.resume(); return; }
+    if (state === 'paused' && clip) {
+      const token = generation;
+      try { await clip.play(); if (token === generation) { state = 'playing'; render(); } }
+      catch { if (token === generation) render('재생을 시작하지 못했습니다. 다시 눌러주세요.'); }
+      return;
+    }
+    stop(); prepareAndPlay(generation);
+  });
+  preview.addEventListener('click', () => { stop(); previewing = true; prepareAndPlay(generation); });
+  stopButton.addEventListener('click', () => stop('듣기를 멈췄습니다. 준비된 부분은 저장되어 다음 준비에 재사용합니다.'));
+  rate.addEventListener('change', () => { stream?.setRate(Number(rate.value) || 0.9); if (clip) clip.playbackRate = Number(rate.value) || 0.9; });
+  voice.addEventListener('change', () => stop('목소리를 바꿨습니다. 미리 듣기로 확인해보세요.'));
+  window.addEventListener('pagehide', () => { stop(); worker?.terminate(); worker = null; cache.clear(); });
+  window.QTReader = Object.freeze({
+    stop,
+    refresh(hasContent) { stop(); chunks = hasContent ? window.QTVoiceText.splitText(summary.innerText) : []; readingHighlight?.refresh(chunks); cache.clear(); render();
+      if (supported && chunks.length) {
+        const token = generation;
+        warmTimer = setTimeout(async () => {
+          try {
+            const key = await trackStore.key('track', JSON.stringify([voice.value, style.value, chunks]));
+            const saved = lastTrack?.key === key || await trackStore.get(key);
+            const native = await nativeAvailable();
+            if (token === generation && !saved && !native) { ensureWorker(); worker.postMessage({ type: 'warmup' }); }
+          } catch { /* Warmup is optional; listening can retry. */ }
+        }, 350);
+      }
+    },
+    setEditing(editing) { if (editing) stop(); panel.hidden = editing; },
+  });
+  render();
+})();
