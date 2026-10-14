@@ -87,13 +87,13 @@ python -m http.server 8765 --bind 127.0.0.1
 - 완성된 전체 음성과 생성 중 완료된 구간을 IndexedDB에 저장. 준비 취소 후 재시도 시 완료 구간을 재사용하고, 같은 본문·목소리·읽기 방식의 전체 음성은 바로 재생. 총 512MB를 넘으면 오래된 저장 항목부터 삭제하며 브라우저에서 저장 자료를 지우면 다시 준비해야 함. 저장 실패 시에도 현재 페이지에서 재생 가능
 - 브라우저 방식에서는 모델 약 398MB와 실행 파일 약 14MB: 처음 사용 시 불러오고 브라우저 Cache Storage에 모델 보관. 저장 공간 제한 시 캐시 없이 동작
 
-`index.html`은 `speech-text.js`, `audio-track.js`, `reader-stream.js`, `reader-ai.js`, `voice-worker.mjs`와 `assets/tts/`를 사용합니다. 기존 `reader.js`는 더 이상 로드하지 않으며 기기 음성으로 자동 전환하지 않습니다. 이미지 및 첨부 문서 OCR은 포함하지 않습니다.
+`index.html`은 `speech-text.js`, `audio-track.js`, `reader-stream.js`, `reader-ai.js`, `voice-worker.mjs`를 사용합니다. 공개 사이트의 음성 실행 코드는 단일 Worker에 포함됩니다. 기존 `reader.js`는 더 이상 로드하지 않으며 기기 음성으로 자동 전환하지 않습니다. 이미지 및 첨부 문서 OCR은 포함하지 않습니다.
 
 ### 설치와 실행
 
 모델 파일이 없는 새 설치에서는 PowerShell에서 `./install-voice-model.ps1`을 실행합니다. 공식 저장소에서 고정 버전을 내려받고 ONNX 파일의 LFS SHA-256과 대조합니다. PC 가속을 설치하려면 `python -m pip install --target native-deps -r requirements-voice.txt`를 실행한 뒤 `python serve.py`로 실행합니다. 네이티브 실행용 `native_voice.py`, `supertonic_helper.py`도 필요합니다. 이 로컬 서버는 127.0.0.1:8765에만 바인딩하며 COOP same-origin / COEP credentialless 헤더로 WASM 멀티스레드를 활성화합니다. 기존 단순 HTTP 서버는 단일 스레드로만 동작합니다. HTTPS 또는 localhost의 최신 Chrome/Edge를 권장합니다. 첫 초기화와 합성 시간은 기기 성능에 따라 달라집니다.
 
-GitHub Pages에서는 `voice-runtime.mjs`가 ONNX Runtime Web 1.30.0의 WASM 바이너리를 jsDelivr에서, 모델을 공식 Hugging Face 저장소의 고정 revision에서 직접 불러옵니다. `voice-worker.mjs`, `voice-runtime.mjs`, `assets/tts/helper.mjs`, `assets/tts/runtime/`의 두 `.mjs` 파일과 라이선스 파일을 코드와 함께 배포해야 합니다. 대형 ONNX 파일을 GitHub 저장소에 올리거나 Python 서버를 실행할 필요가 없습니다. 외부 요청은 실행 파일·모델 다운로드이며 본문 합성은 방문자의 브라우저에서 처리합니다. 공개 사이트는 로컬 전용 `/api/voice`를 호출하지 않습니다.
+GitHub Pages용 `voice-worker.mjs`에는 ONNX Runtime JavaScript와 Supertonic helper를 함께 묶었습니다. 공개 배포 시 `assets/tts/`나 `voice-runtime.mjs`를 따로 올릴 필요가 없습니다. 수정 배포 파일은 최상위의 `index.html`, `reader-ai.js`, `voice-worker.mjs`, `README.md` 네 개입니다. WASM 실행 바이너리와 보조 모듈은 jsDelivr의 ONNX Runtime Web 1.30.0, 모델은 공식 Hugging Face 저장소의 고정 revision에서 내려받습니다. 외부 요청은 실행 파일·모델 다운로드이며 본문 합성은 방문자의 브라우저에서 처리합니다. 공개 사이트는 로컬 전용 `/api/voice`를 호출하지 않습니다.
 
 최초 사용 시 약 412MB 다운로드와 초기화가 필요하며 다운로드 진행 상황을 표시합니다. 준비 제한 시간은 10분입니다. 모델과 생성 음성을 브라우저에 저장하여 다음 사용 때 재사용합니다. GitHub Pages는 기본적으로 단일 WASM 스레드로 실행되므로 로컬 PC 가속보다 느릴 수 있습니다. 외부 배포처가 차단된 네트워크에서는 파일을 불러올 수 없습니다. localhost에서는 기존 설치된 로컬 실행 파일·모델과 PC 가속을 그대로 사용합니다.
 
@@ -101,7 +101,7 @@ GitHub Pages에서는 `voice-runtime.mjs`가 ONNX Runtime Web 1.30.0의 WASM 바
 
 - 공식 모델: https://huggingface.co/supertone-oss-archive/supertonic-3 (revision `aafc6e32416a594460b32413efc49d7fe4ce6d46`)
 - 공식 코드: https://github.com/supertone-oss-archive/supertonic (revision `1e9799e964ea4c0dad7cde993b65c3c813a7b373`)
-- ONNX Runtime Web 1.30.0 / MIT. 모델 라이선스는 OpenRAIL-M이며 `assets/tts/model/LICENSE`를 함께 제공합니다. 샘플 코드 및 런타임 MIT 고지도 포함합니다.
+- ONNX Runtime Web 1.30.0 / MIT. 모델 라이선스는 OpenRAIL-M이며 [공식 고정 버전 라이선스](https://huggingface.co/supertone-oss-archive/supertonic-3/blob/aafc6e32416a594460b32413efc49d7fe4ce6d46/LICENSE)를 참고하세요. 샘플 코드 및 런타임 MIT 고지는 단일 Worker 파일에 포함합니다.
 - 모델 원저장소는 보관 상태이며 업데이트·지원이 종료되었습니다. 버전 및 체크섬을 고정하고 모델은 데이터 파일로만 사용합니다. 사람 음성의 녹음이 아닌 AI 생성물이며 오독 가능성이 있으므로 중요한 구절은 본문과 함께 확인하세요.
 
 ## 운영 전 보안 주의
