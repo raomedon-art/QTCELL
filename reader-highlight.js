@@ -43,9 +43,15 @@
     });
   }
   class ReadingHighlight {
-    constructor(container) { this.container = container; this.ranges = []; this.index = -1; this.block = null; }
+    constructor(container) { this.container = container; this.ranges = []; this.index = -1; this.block = null; this.seekBlocks = []; }
     refresh(chunks) {
       this.clear(); this.ranges = [];
+      for (const { block, attributes } of this.seekBlocks) {
+        for (const [name, value] of Object.entries(attributes)) {
+          if (value === null) block.removeAttribute(name); else block.setAttribute(name, value);
+        }
+      }
+      this.seekBlocks = [];
       let text = ''; const nodes = [];
       const visit = node => {
         if (node.nodeType === 3) {
@@ -73,6 +79,33 @@
         return range;
       });
       this.container.dataset.readerMapped = String(this.ranges.filter(Boolean).length);
+      const seen = new Set();
+      this.ranges.forEach((range, index) => {
+        const block = range?.startContainer.parentElement.closest('p,li,td,th,h1,h2,h3,h4,h5,h6,blockquote,div');
+        if (!block || block === this.container || !this.container.contains(block) || seen.has(block) || block.closest('a,button,[contenteditable="true"]')) return;
+        seen.add(block);
+        const attributes = Object.fromEntries(['data-reader-seek','tabindex','title'].map(name => [name, block.getAttribute(name)]));
+        this.seekBlocks.push({ block, attributes });
+        block.setAttribute('data-reader-seek', String(index)); block.setAttribute('tabindex', '0');
+        block.setAttribute('title', '여기부터 듣기 · Enter 키로 재생');
+      });
+    }
+    indexAt(event) {
+      const target = event.target?.nodeType === 3 ? event.target.parentElement : event.target;
+      if (!target || !this.container.contains(target) || target.closest('a,button,input,textarea,select,[contenteditable="true"]')) return -1;
+      if (event.type !== 'keydown') {
+        const doc = this.container.ownerDocument;
+        const caret = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
+        const legacy = !caret && doc.caretRangeFromPoint?.(event.clientX, event.clientY);
+        const node = caret?.offsetNode || legacy?.startContainer;
+        const offset = caret ? caret.offset : legacy?.startOffset;
+        if (node && this.container.contains(node)) {
+          const index = this.ranges.findIndex(range => range?.isPointInRange(node, offset));
+          if (index >= 0) return index;
+        }
+      }
+      const block = target.closest('[data-reader-seek]');
+      return block && this.container.contains(block) ? Number(block.getAttribute('data-reader-seek')) : -1;
     }
     clear() {
       root.CSS?.highlights?.delete('qt-reading');
@@ -104,3 +137,4 @@
   if (typeof module !== 'undefined') module.exports = { mapSpeech, locateChunks, ReadingHighlight };
   else root.QTReadingHighlight = ReadingHighlight;
 })(typeof window !== 'undefined' ? window : this);
+
