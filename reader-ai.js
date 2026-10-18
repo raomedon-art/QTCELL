@@ -258,9 +258,10 @@
       const response = await fetch(data[0].signedUrl + (data[0].signedUrl.includes('?') ? '&' : '?') + 'speech=20261018-bible-1&t=' + Date.now(), { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (!response.ok) return null;
       const manifest = await response.json(), track = manifest.tracks?.[selectedStyle];
-      if (manifest.chunks?.map(chunk => chunk.text).join('').replace(/\s/g, '') !== expectedSpeech) return null;
-      // Old recordings must not keep the old pronunciation after a speech-rule update.
-      if (manifest.updating || manifest.chunks?.some(chunk => typeof chunk.text === 'string' && window.QTVoiceText.normalizeSpeech(chunk.text).replace(/\s+/g, ' ').trim() !== chunk.text.replace(/\s+/g, ' ').trim())) return null;
+      // A pronunciation update must never force a visitor to synthesize an
+      // already-recorded article. Keep its matching audio and cues together
+      // until the publisher replaces them; recheck older speech shortly.
+      if (manifest.updating) return null;
       if (manifest.version !== 1 || manifest.sourceHash !== hash || manifest.voice !== selectedVoice
         || !Array.isArray(manifest.chunks) || !manifest.chunks.length || !track
         || track.path !== paths[1] || track.ends?.length !== manifest.chunks.length
@@ -268,10 +269,16 @@
         || !manifest.chunks.every(chunk => typeof chunk.text === 'string' && chunk.text.trim())) return null;
       const revision = manifest.audioRevision;
       const audioUrl = revision ? data[1].signedUrl + (data[1].signedUrl.includes('?') ? '&' : '?') + 'revision=' + encodeURIComponent(revision) : data[1].signedUrl;
-      return { url: audioUrl, ends: track.ends, chunks: manifest.chunks };
+      const pronunciationPending = manifest.chunks.map(chunk => chunk.text).join('').replace(/\s/g, '') !== expectedSpeech;
+      return { url: audioUrl, ends: track.ends, chunks: manifest.chunks, pronunciationPending };
     })().catch(() => null);
     shared.set(cacheKey, { promise, expires: Date.now() + 23 * 60 * 60 * 1000 });
-    promise.then(result => { if (!result && shared.get(cacheKey)?.promise === promise) shared.delete(cacheKey); });
+    promise.then(result => {
+      const entry = shared.get(cacheKey);
+      if (entry?.promise !== promise) return;
+      if (!result) shared.delete(cacheKey);
+      else if (result.pronunciationPending) entry.expires = Date.now() + 60000;
+    });
     return promise;
   }
   async function prepareAndPlay(token, request = { index: 0 }, autoplay = true) {
