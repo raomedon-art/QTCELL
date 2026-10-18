@@ -16,9 +16,20 @@
     return text
       .replace(/\r/g, "").replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/^[\t ]*[□■▪▫●○•※\uF000-\uF8FF]+[\t ]*/gm, "")
+      // Bible abbreviations are expanded only immediately before a reference.
+      .replace(/(?<![\p{L}\p{N}])마[\t ]*(?=\d+[\t ]*(?:[:：장~～∼〜\-‐‑‒–—−]))/gu, "마태복음 ")
+      // Parse the most specific reference first so a cross-chapter range is
+      // not mistaken for a single verse or a time with a leading zero.
+      .replace(/(?<![\d:：])(\d{1,3})[\t ]*[:：][\t ]*(\d{1,3})[\t ]*[~～∼〜\-‐‑‒–—−][\t ]*(\d{1,3})[\t ]*[:：][\t ]*(\d{1,3})(?![\d:：])(?:[\t ]*절)?/g,
+        (_, chapter, verse, endChapter, endVerse) => `${koreanNumber(chapter)} 장 ${koreanNumber(verse)} 절에서 ${koreanNumber(endChapter)} 장 ${koreanNumber(endVerse)} 절`)
+      .replace(/(?<![\d:：])(\d{1,3})[\t ]*[:：][\t ]*(\d{1,3})[\t ]*[~～∼〜\-‐‑‒–—−][\t ]*(\d{1,3})(?![\d:：])(?:[\t ]*절)?/g,
+        (_, chapter, verse, endVerse) => `${koreanNumber(chapter)} 장 ${koreanNumber(verse)} 절에서 ${koreanNumber(endVerse)} 절`)
+      .replace(/(?<![\d:：])(\d{1,3})[\t ]*[:：][\t ]*(\d{1,3})(?![\d:：])(?:[\t ]*절)?/g,
+        (_, chapter, verse) => `${koreanNumber(chapter)} 장 ${koreanNumber(verse)} 절`)
+      .replace(/(?<=\d[\t ]*(?:장|절))[\t ]*[~～∼〜\-‐‑‒–—−][\t ]*(?=\d+[\t ]*(?:장|절))/g, "에서 ")
       // A shared unit also applies to the first number: 1~15절, 15-16절.
       .replace(/(\d+)[\t ]*([~～∼〜\-‐‑‒–—−])[\t ]*(\d+)[\t ]*(장|절)/g,
-        (_, first, separator, last, unit) => `${koreanNumber(first)} ${unit}${/[~～∼〜]/.test(separator) ? "에서" : " "} ${koreanNumber(last)} ${unit}`)
+        (_, first, separator, last, unit) => `${koreanNumber(first)} ${unit}에서 ${koreanNumber(last)} ${unit}`)
       .replace(/(\d+)[\t ]*(장|절)/g, (_, digits, unit) => `${koreanNumber(digits)} ${unit}`)
       .replace(/[\t ]*[~～∼〜][\t ]*/g, "에서 ")
       .replace(/[\-‐‑‒–—−]/g, " ");
@@ -58,3 +69,4 @@
   if (typeof module !== 'undefined') module.exports = api;
   else root.QTVoiceText = api;
 })(typeof window !== 'undefined' ? window : this);
+
