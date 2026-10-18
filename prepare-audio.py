@@ -26,10 +26,11 @@ MODEL_URL = f'https://huggingface.co/supertone-oss-archive/supertonic-3/resolve/
 PREVIEW = '말씀을 함께 나누는 시간입니다. 오늘의 묵상을 차분하게 들어보세요.'
 
 
-def request(path, data=None, method=None, content_type='application/json'):
+def request(path, data=None, method=None, content_type='application/json', extra_headers=None):
     if isinstance(data, (dict, list)):
         data = json.dumps(data, ensure_ascii=False).encode()
     headers = {'apikey': KEY, 'Content-Type': content_type}
+    headers.update(extra_headers or {})
     for attempt in range(3):
         try:
             with urlopen(Request(URL + path, data, headers, method=method), timeout=90) as response:
@@ -62,12 +63,31 @@ def exists(path):
 
 
 def upload(path, data, mime):
-    # Immutable content-addressed paths. Never overwrite unrelated user files.
+    # Only replace derived speech assets. Reusing their paths keeps the free
+    # storage footprint bounded; the manifest carries an audio cache revision.
+    if not path.startswith('audio/v1/'):
+        raise ValueError('Not a generated speech asset')
+    request(f'/storage/v1/object/{BUCKET}/{path}', data, 'POST', mime,
+            {'x-upsert': 'true', 'Cache-Control': 'max-age=60'})
+
+
+def read_manifest(record, voice):
+    path = prefix(record, voice) + '/manifest.json'
     try:
-        request(f'/storage/v1/object/{BUCKET}/{path}', data, 'POST', mime)
+        signed = json.loads(request(f'/storage/v1/object/sign/{BUCKET}/{path}', {'expiresIn': 60}))['signedURL']
+        address = signed if signed.startswith('https://') else URL + '/storage/v1' + signed
+        with urlopen(address + '&refresh=' + str(time.time_ns()), timeout=90) as response:
+            return json.load(response)
     except HTTPError as error:
-        if error.code not in (400, 409) or not exists(path):
-            raise
+        if error.code in (400, 404):
+            return None
+        raise
+
+
+def matches(manifest, chunks):
+    return bool(manifest and not manifest.get('updating')
+                and manifest.get('chunks') == chunks
+                and all(style in manifest.get('tracks', {}) for style in ['gentle', 'standard']))
 
 
 def records():
@@ -78,8 +98,9 @@ def records():
 def missing_jobs(rows):
     jobs = []
     for record in rows:
+        chunks = chunks_for(record['summary'])
         for voice in ['F1', 'F2', 'M1', 'M2']:
-            if not exists(prefix(record, voice) + '/manifest.json'):
+            if not matches(read_manifest(record, voice), chunks):
                 jobs.append({'id': record['id'], 'voice': voice})
     return jobs
 
@@ -112,14 +133,15 @@ def chunks_for(text):
 
 def build(record, voice, engine=None):
     base = prefix(record, voice)
-    if exists(base + '/manifest.json'):
+    chunks = chunks_for(record['summary'])
+    previous = read_manifest(record, voice)
+    if matches(previous, chunks):
         return engine
     if engine is None:
         from native_voice import NativeVoice
         engine = NativeVoice(ROOT)
         engine.threads = min(4, os.cpu_count() or 1)
         engine.load()
-    chunks = chunks_for(record['summary'])
     if not chunks:
         raise ValueError('No speech chunks')
     pcm_parts, durations = [], []
@@ -132,7 +154,8 @@ def build(record, voice, engine=None):
         durations.append(len(pcm) / (sample_rate * 2))
         if index % 10 == 0:
             print(f'{record["id"]} {voice} {index + 1}/{len(chunks)} RTF={elapsed / duration:.2f}', flush=True)
-    tracks = {}
+    tracks, uploads = {}, []
+    revision = hashlib.sha256()
     with tempfile.TemporaryDirectory() as directory:
         for style in ['gentle', 'standard']:
             wav_path, out_path = Path(directory) / 'track.wav', Path(directory) / 'track.ogg'
@@ -151,9 +174,16 @@ def build(record, voice, engine=None):
             subprocess.run([os.environ.get('FFMPEG', 'ffmpeg'), '-hide_banner', '-loglevel', 'error', '-y', '-i', str(wav_path), '-ac', '1', '-ar', '24000', '-c:a', 'libopus', '-b:a', '20k', '-vbr', 'off', '-application', 'voip', str(out_path)], check=True)
             data = out_path.read_bytes()
             path = base + '/' + style + '.ogg'
-            upload(path, data, 'audio/ogg')
+            uploads.append((path, data))
+            revision.update(data)
             tracks[style] = {'path': path, 'ends': ends, 'duration': total, 'bytes': len(data)}
-    manifest = {'version': 1, 'sourceHash': source_hash(record), 'voice': voice, 'chunks': chunks, 'tracks': tracks}
+    # Invalidate the old cue sheet before replacing either audio file. A failed
+    # upload leaves a retryable marker, never a ready manifest with stale cues.
+    if previous:
+        upload(base + '/manifest.json', json.dumps({'version': 1, 'updating': True}).encode(), 'application/json')
+    for path, data in uploads:
+        upload(path, data, 'audio/ogg')
+    manifest = {'version': 1, 'audioRevision': revision.hexdigest()[:24], 'sourceHash': source_hash(record), 'voice': voice, 'chunks': chunks, 'tracks': tracks}
     # Commit the manifest LAST: readers can never discover a half-written track.
     upload(base + '/manifest.json', json.dumps(manifest, ensure_ascii=False).encode(), 'application/json')
     print(f'READY {record["id"]} {voice} {tracks["gentle"]["duration"]:.1f}s', flush=True)
@@ -191,3 +221,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
