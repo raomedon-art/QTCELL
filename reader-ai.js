@@ -241,6 +241,7 @@
   async function sharedTrack(isPreview, selectedVoice, selectedStyle) {
     const source = recordSource;
     if (!source?.storage) return null;
+    const expectedSpeech = (isPreview ? window.QTVoiceText.splitText(sample) : window.QTVoiceText.splitText(summary.innerText)).map(chunk => chunk.text).join('').replace(/\s/g, '');
     const raw = isPreview ? sample : source.content;
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
     const hash = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
@@ -254,15 +255,20 @@
       const paths = [base + '/manifest.json', base + '/' + selectedStyle + '.ogg'];
       const { data, error } = await source.storage.createSignedUrls(paths, 86400);
       if (error || !data?.[0]?.signedUrl || !data?.[1]?.signedUrl) return null;
-      const response = await fetch(data[0].signedUrl, { signal: AbortSignal.timeout(8000) });
+      const response = await fetch(data[0].signedUrl + (data[0].signedUrl.includes('?') ? '&' : '?') + 'speech=20261018-bible-1&t=' + Date.now(), { signal: AbortSignal.timeout(8000), cache: 'no-store' });
       if (!response.ok) return null;
       const manifest = await response.json(), track = manifest.tracks?.[selectedStyle];
+      if (manifest.chunks?.map(chunk => chunk.text).join('').replace(/\s/g, '') !== expectedSpeech) return null;
+      // Old recordings must not keep the old pronunciation after a speech-rule update.
+      if (manifest.updating || manifest.chunks?.some(chunk => typeof chunk.text === 'string' && window.QTVoiceText.normalizeSpeech(chunk.text).replace(/\s+/g, ' ').trim() !== chunk.text.replace(/\s+/g, ' ').trim())) return null;
       if (manifest.version !== 1 || manifest.sourceHash !== hash || manifest.voice !== selectedVoice
         || !Array.isArray(manifest.chunks) || !manifest.chunks.length || !track
         || track.path !== paths[1] || track.ends?.length !== manifest.chunks.length
         || !track.ends.every((end, i) => Number.isFinite(end) && end > (i ? track.ends[i - 1] : 0))
         || !manifest.chunks.every(chunk => typeof chunk.text === 'string' && chunk.text.trim())) return null;
-      return { url: data[1].signedUrl, ends: track.ends, chunks: manifest.chunks };
+      const revision = manifest.audioRevision;
+      const audioUrl = revision ? data[1].signedUrl + (data[1].signedUrl.includes('?') ? '&' : '?') + 'revision=' + encodeURIComponent(revision) : data[1].signedUrl;
+      return { url: audioUrl, ends: track.ends, chunks: manifest.chunks };
     })().catch(() => null);
     shared.set(cacheKey, { promise, expires: Date.now() + 23 * 60 * 60 * 1000 });
     promise.then(result => { if (!result && shared.get(cacheKey)?.promise === promise) shared.delete(cacheKey); });
@@ -461,5 +467,6 @@
   });
   render();
 })();
+
 
 
