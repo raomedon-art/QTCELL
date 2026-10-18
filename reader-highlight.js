@@ -1,5 +1,29 @@
 (function (root) {
   'use strict';
+  function koreanNumber(digits) {
+    const value = Number(digits);
+    if (!Number.isInteger(value) || value < 0 || value > 9999) return digits;
+    if (value === 0) return "영";
+    const names = ["", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구"];
+    const units = ["", "십", "백", "천"];
+    return String(value).split("").map((digit, index, all) => {
+      const place = all.length - index - 1;
+      return digit === "0" ? "" : (digit === "1" && place > 0 ? "" : names[Number(digit)]) + units[place];
+    }).join("");
+  }
+
+  // Transform only the speech copy, never the displayed/stored meditation.
+  function normalizeLegacySpeech(text) {
+    return text
+      .replace(/\r/g, "").replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/^[\t ]*[□■▪▫●○•※\uF000-\uF8FF]+[\t ]*/gm, "")
+      // A shared unit also applies to the first number: 1~15절, 15-16절.
+      .replace(/(\d+)[\t ]*([~～∼〜\-‐‑‒–—−])[\t ]*(\d+)[\t ]*(장|절)/g,
+        (_, first, separator, last, unit) => `${koreanNumber(first)} ${unit}${/[~～∼〜]/.test(separator) ? "에서" : " "} ${koreanNumber(last)} ${unit}`)
+      .replace(/(\d+)[\t ]*(장|절)/g, (_, digits, unit) => `${koreanNumber(digits)} ${unit}`)
+      .replace(/[\t ]*[~～∼〜][\t ]*/g, "에서 ")
+      .replace(/[\-‐‑‒–—−]/g, " ");
+  }
   // Run the existing pronunciation normalizer through a replace adapter. Each
   // spoken character retains the UTF-16 source range, including 15 -> 십오.
   function mapSpeech(text, normalize) {
@@ -28,7 +52,7 @@
     normalize(mapped);
     return mapped;
   }
-  function locateChunks(raw, chunks, normalize) {
+  function locateMappedChunks(raw, chunks, normalize) {
     const mapped = mapSpeech(raw, normalize), chars = [], offsets = [];
     for (let i = 0; i < mapped.text.length; i++) {
       if (!/\s/.test(mapped.text[i])) { chars.push(mapped.text[i]); offsets.push(i); }
@@ -41,6 +65,14 @@
       cursor = index + needle.length;
       return { start: mapped.starts[offsets[index]], end: mapped.ends[offsets[cursor - 1]] };
     });
+  }
+  function locateChunks(raw, chunks, normalize) {
+    const current = locateMappedChunks(raw, chunks, normalize);
+    if (current.every(Boolean)) return current;
+    // Compatibility while saved recordings receive the new pronunciation.
+    // Use a single mapping for the whole recording to preserve source order.
+    const legacy = locateMappedChunks(raw, chunks, normalizeLegacySpeech);
+    return legacy.filter(Boolean).length > current.filter(Boolean).length ? legacy : current;
   }
   class ReadingHighlight {
     constructor(container) { this.container = container; this.ranges = []; this.index = -1; this.block = null; this.seekBlocks = []; }
