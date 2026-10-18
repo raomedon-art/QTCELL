@@ -3,8 +3,8 @@
   // Preload the next clips while the current clip plays. No synthesis or added
   // timeout runs in the transition between clips; pauses are already in the WAV.
   class Stream {
-    constructor({ rate = 0.9, onState, onPosition, onComplete, onError }) {
-      Object.assign(this, { rate, onState, onPosition, onComplete, onError });
+    constructor({ rate = 0.9, onState, onPosition, onTime, onComplete, onError, startFraction = 0, startPaused = false }) {
+      Object.assign(this, { rate, onState, onPosition, onTime, onComplete, onError, startFraction, startPaused });
       this.entries = []; this.cursor = 0; this.started = false; this.paused = false;
       this.stopped = false; this.complete = false; this.current = null; this.waiters = [];
     }
@@ -32,7 +32,15 @@
     }
     wake() { this.waiters.splice(0).forEach(resolve => resolve()); }
     finish() { this.complete = true; if (this.started && !this.paused && !this.current) this.advance(); }
-    start() { this.started = true; this.paused = false; return this.advance(); }
+    start() {
+      this.started = true; this.paused = false;
+      if (this.startPaused) {
+        this.startPaused = false; this.prime(); this.current = this.entries[this.cursor]?.audio;
+        if (this.current) this.current.currentTime = this.entries[this.cursor].duration * this.startFraction;
+        this.startFraction = 0; this.paused = true; this.onPosition(this.cursor); this.onState('paused'); return;
+      }
+      return this.advance();
+    }
     async advance() {
       if (this.stopped || this.paused) return;
       if (this.cursor >= this.entries.length) {
@@ -43,6 +51,8 @@
       this.prime();
       const entry = this.entries[this.cursor], audio = entry.audio;
       this.current = audio;
+      if (this.startFraction) { audio.currentTime = entry.duration * this.startFraction; this.startFraction = 0; }
+      audio.ontimeupdate = () => { if (!this.stopped && this.current === audio) this.onTime?.(this.cursor, audio.currentTime / entry.duration); };
       audio.onended = () => {
         if (this.stopped || this.current !== audio) return;
         this.release(entry); this.current = null; this.cursor++; this.wake();
@@ -67,7 +77,7 @@
     }
     release(entry) {
       if (!entry.audio) return;
-      entry.audio.onended = entry.audio.onerror = null; entry.audio.pause(); entry.audio.removeAttribute('src'); entry.audio.load();
+      entry.audio.onended = entry.audio.onerror = entry.audio.ontimeupdate = null; entry.audio.pause(); entry.audio.removeAttribute('src'); entry.audio.load();
       URL.revokeObjectURL(entry.url); entry.audio = null; entry.url = null;
     }
     stop() { this.stopped = true; this.entries.forEach(entry => this.release(entry)); this.current = null; this.wake(); }
@@ -75,3 +85,4 @@
   if (typeof module !== 'undefined') module.exports = Stream;
   else root.QTAudioStream = Stream;
 })(typeof window !== 'undefined' ? window : this);
+
