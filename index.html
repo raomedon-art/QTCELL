@@ -87,6 +87,7 @@
               </div>
             </div>
 
+            <section class="form-card" data-audio-queue hidden aria-label="게시 대기 중인 글"></section>
             <div class="library-toolbar" role="search" aria-label="묵상 자료 검색">
               <select id="search-scope" aria-label="검색 범위">
                 <option value="all">전체</option>
@@ -178,6 +179,7 @@
                 <p class="reader-status" id="reader-status" role="status" aria-live="polite" aria-atomic="true">앞부분이 준비되면 먼저 재생하고, 듣는 동안 뒤의 음성을 준비합니다.</p>
               </section>
               <div class="rich-content" id="detail-summary"></div>
+              <p class="reader-hint" id="detail-audio-pending" hidden>음성을 준비 중인 글입니다. 준비가 끝나면 자동으로 게시되며, 본문을 수정하면 수정한 내용으로 다시 준비합니다.</p>
               <form class="detail-edit-form" id="detail-edit-form" hidden>
                 <div class="field-grid">
                   <label class="field"><span>묵상날짜 *</span><input id="detail-edit-date" type="date" required /></label>
@@ -271,8 +273,9 @@
             </div>
 
             <div class="form-actions">
+              <p>기본 목소리 준비가 끝난 뒤 게시됩니다. 등록 후에는 창을 닫아도 됩니다.</p>
               <button class="button secondary" type="button" data-view-link="library">취소</button>
-              <button class="button primary" type="submit">등록</button>
+              <button class="button primary" type="submit">음성 준비 후 게시</button>
             </div>
           </form>
           <!-- The optional file input deliberately lives outside the form so a
@@ -391,11 +394,7 @@
     <script src="./audio-track.js?v=20261014-continuous-1"></script>
     <script src="./reader-highlight.js?v=20261018-fast-2"></script>
     <script src="./reader-stream.js?v=20261018-seek-1"></script>
-    <script src="./reader-ai.js?v=20261018-fast-2"></script>
-    <script src="./app.js?v=20261014-instant-1"></script>
+    <script src="./reader-ai.js?v=20261019-publish-1"></script>
+    <script src="./app.js?v=20261019-publish-1"></script>
   </body>
 </html>
-
-
-
-
