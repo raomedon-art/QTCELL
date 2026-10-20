@@ -306,6 +306,12 @@ async function refreshCloudData({ announce = false } = {}) {
     try {
       await loadCloudState();
       renderRecords();
+      const opened = records.find(record => record.id === currentDetailRecordId);
+      if (opened && detailEditForm.hidden) {
+        const pendingAudio = opened.publicationStatus === 'pending';
+        document.querySelector('#detail-audio-pending').hidden = !pendingAudio;
+        window.QTReader.setEditing(pendingAudio);
+      }
       renderMembers();
       updateCloudSyncPanel();
       setSyncState("synced", `동기화됨 · ${syncTimeLabel()}`);
@@ -484,6 +490,9 @@ function cloudRecordFromRow(row) {
     owner: row.owner || "",
     createdAt: row.created_at,
     viewCount: Math.max(0, Number(row.view_count) || 0),
+    publicationStatus: row.publication_status || 'published',
+    audioProgress: Number(row.audio_progress) || 0,
+    audioError: row.audio_error || '',
   };
 }
 
@@ -760,7 +769,7 @@ function compareRecordsByUploadOrder(left, right) {
 }
 
 function createRecordSequenceMap() {
-  const orderedRecords = [...records].sort(compareRecordsByUploadOrder);
+  const orderedRecords = records.filter(record => record.publicationStatus !== 'pending').sort(compareRecordsByUploadOrder);
 
   return new Map(orderedRecords.map((record, index) => [record.id, index + 1]));
 }
@@ -809,12 +818,36 @@ function renderPagination(totalItems, pageSize) {
   ].join("");
 }
 
+function renderAudioQueue() {
+  const waiting = hasUploadPermission() ? records.filter(record => record.publicationStatus === 'pending') : [];
+  for (const container of document.querySelectorAll('[data-audio-queue]')) {
+    container.hidden = !waiting.length;
+    container.innerHTML = waiting.length ? `<h3>음성 준비 중 · ${waiting.length}건</h3><p>준비가 끝나면 자료실에 자동으로 게시됩니다. 창을 닫아도 계속 진행됩니다.</p>` + waiting.map(record => {
+      const value = Math.max(0, Math.min(100, record.audioProgress || 0));
+      const message = record.audioError || (value ? `음성을 준비하고 있습니다 · ${value}%` : '음성 준비 순서를 기다리고 있습니다');
+      return `<article class="form-card" style="margin-top:12px;padding:16px"><strong>${escapeHtml(record.title)}</strong><p role="status">${escapeHtml(message)}</p><progress max="100" value="${value}" style="width:100%" aria-label="${escapeHtml(record.title)} 음성 준비"></progress><button class="button secondary compact" type="button" data-audio-draft="${escapeHtml(record.id)}">내용 확인·수정</button></article>`;
+    }).join('') : '';
+  }
+}
+
+document.addEventListener('click', event => {
+  const draft = event.target.closest('[data-audio-draft]');
+  if (draft && hasUploadPermission()) openRecordDetail(draft.dataset.audioDraft, {countView:false});
+});
+
+// Also refresh ordinary members so a newly ready article appears automatically.
+setInterval(() => {
+  if (session && cloudEnabled && document.visibilityState === 'visible') refreshCloudData();
+}, 30000);
+
 function renderRecords() {
+  renderAudioQueue();
   const query = searchInput.value.trim().toLowerCase();
   const scope = searchScope.value;
   const pageSize = Number(pageSizeSelect.value) || 10;
   const sequenceById = createRecordSequenceMap();
   const visible = records.filter((record) => {
+    if (record.publicationStatus === 'pending') return false;
     const titleText = [record.title, record.passage, formatMeditationRange(record)]
       .filter(Boolean)
       .join(" ")
@@ -831,7 +864,7 @@ function renderRecords() {
   const pageRecords = visible.slice(startIndex, startIndex + pageSize);
   if (resultCount) {
     resultCount.innerHTML = query
-      ? `<b>${visible.length}</b> / ${records.length}건`
+      ? `<b>${visible.length}</b> / ${records.filter(record => record.publicationStatus !== 'pending').length}건`
       : `<b>${visible.length}</b>건`;
   }
   recordList.innerHTML = visible.length
@@ -840,7 +873,7 @@ function renderRecords() {
 }
 
 function closeDetailEditor() {
-  window.QTReader.setEditing(false);
+  window.QTReader.setEditing(records.find(record => record.id === currentDetailRecordId)?.publicationStatus === 'pending');
   detailEditForm.hidden = true;
   detailSummary.hidden = false;
   detailEditButton.hidden = false;
@@ -855,6 +888,7 @@ function normalizeDateInput(value) {
 async function openRecordDetail(recordId, { countView = true } = {}) {
   const record = records.find((item) => item.id === recordId);
   if (!record) return;
+  if (record.publicationStatus === 'pending' && !hasUploadPermission()) return;
   window.QTReader.stop();
   if (countView) {
     record.viewCount = Math.max(0, Number(record.viewCount) || 0) + 1;
@@ -887,6 +921,9 @@ async function openRecordDetail(recordId, { countView = true } = {}) {
     id: record.id, content: savedHtml || record.summary || "",
     storage: cloudEnabled ? cloudClient.storage.from(CLOUD_CONFIG.bucket) : null,
   });
+  const pendingAudio = record.publicationStatus === 'pending';
+  document.querySelector('#detail-audio-pending').hidden = !pendingAudio;
+  window.QTReader.setEditing(pendingAudio);
 }
 
 async function openDetailEditor() {
@@ -1388,7 +1425,9 @@ detailEditForm.addEventListener("submit", async (event) => {
     renderRecords();
     await openRecordDetail(record.id, { countView: false });
     setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
-    showToast("수정 내용을 저장했습니다.");
+    showToast(records.find(item => item.id === record.id)?.publicationStatus === 'pending'
+      ? "수정 내용을 저장했습니다. 음성 준비가 끝나면 다시 게시됩니다."
+      : "수정 내용을 저장했습니다.");
   } catch (error) {
     console.error("Record update failed", error);
     showToast("수정 내용을 저장하지 못했습니다. 다시 시도해주세요.");
@@ -1480,7 +1519,7 @@ uploadForm.addEventListener("submit", async (event) => {
     renderRecords();
     switchView("library");
     setSyncState(cloudEnabled ? "synced" : "local", cloudEnabled ? `동기화됨 · ${syncTimeLabel()}` : "이 기기에 저장 중");
-    showToast("승인된 구성원이 볼 수 있도록 자료를 등록했어요.");
+    showToast(record.publicationStatus === 'pending' ? "글을 보관했습니다. 음성 준비가 끝나면 자동으로 게시됩니다." : "자료를 등록했어요.");
   } catch (error) {
     console.error("Record save failed", error);
     showToast("자료 저장 중 문제가 생겼어요. 다시 시도해주세요.");
