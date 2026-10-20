@@ -292,7 +292,11 @@
     preparingTotal = selectedChunks.length; prepared = 0; beganAt = performance.now();
     state = 'loading'; render('저장된 음성을 확인하고 있습니다.');
     try {
-      const ready = await sharedTrack(previewing, selectedVoice, selectedStyle);
+      let ready = await sharedTrack(previewing, selectedVoice, selectedStyle);
+      if (!ready && recordSource?.storage && selectedVoice !== 'F1') {
+        ready = await sharedTrack(previewing, 'F1', selectedStyle);
+        if (ready && token === generation) voice.value = 'F1';
+      }
       if (token !== generation) return;
       if (ready) {
         if (!previewing) { chunks = ready.chunks; readingHighlight?.refresh(chunks); }
@@ -300,6 +304,12 @@
         panel.dataset.voiceEngine = 'shared-audio';
         await playClip(token, ready, request, autoplay);
         if (token === generation) panel.dataset.startupMs = String(Math.round(performance.now() - beganAt));
+        return;
+      }
+      // A published cloud article is prepared by its publisher. Never turn a
+      // reader's click into a model download and long local synthesis job.
+      if (recordSource?.storage) {
+        stop('저장된 음성을 아직 불러오지 못했습니다. 잠시 후 다시 눌러주세요.');
         return;
       }
       const key = await trackStore.key('track', JSON.stringify([selectedVoice, selectedStyle, selectedChunks]));
@@ -474,6 +484,3 @@
   });
   render();
 })();
-
-
-
