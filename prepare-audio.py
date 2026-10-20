@@ -4,6 +4,7 @@ Uses the existing publishable client and existing private bucket policies.
 No service key, paid speech API, or browser/device voice is used.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
@@ -91,18 +92,38 @@ def matches(manifest, chunks):
 
 
 def records():
-    rows = json.loads(request('/rest/v1/qtcell_records?select=id,summary,content_html,meeting_date&order=meeting_date.desc&limit=1000'))
+    rows = json.loads(request('/rest/v1/qtcell_records?select=id,summary,content_html,meeting_date,publication_status,audio_source_hash,created_at&order=created_at.desc&limit=1000'))
     return [r for r in rows if r.get('summary', '').strip()]
 
 
+def publication_progress(record, voice, percent, error=None, ready=False):
+    if voice != 'F1' or record.get('publication_status') != 'pending':
+        return
+    # A superseded edit must never be published by an older generation job.
+    query = f'/rest/v1/qtcell_records?id=eq.{record["id"]}&audio_source_hash=eq.{source_hash(record)}&publication_status=eq.pending'
+    body = {'audio_progress': percent, 'audio_error': error}
+    if ready:
+        body['publication_status'] = 'published'
+    request(query, body, 'PATCH')
+
+
 def missing_jobs(rows):
-    jobs = []
+    rows = sorted(rows, key=lambda record: record.get('publication_status') != 'pending')
+    candidates = []
     for record in rows:
         chunks = chunks_for(record['summary'])
         for voice in ['F1', 'F2', 'M1', 'M2']:
-            if not matches(read_manifest(record, voice), chunks):
-                jobs.append({'id': record['id'], 'voice': voice})
-    return jobs
+            candidates.append((record, voice, chunks))
+    def missing(candidate):
+        record, voice, chunks = candidate
+        if voice == 'F1' and record.get('publication_status') == 'pending':
+            return {'id': record['id'], 'voice': voice}
+        if not matches(read_manifest(record, voice), chunks):
+            return {'id': record['id'], 'voice': voice}
+        return None
+    # Bound network concurrency while preserving pending/newest-first order.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return [job for job in pool.map(missing, candidates) if job]
 
 
 def download_model():
@@ -136,7 +157,9 @@ def build(record, voice, engine=None):
     chunks = chunks_for(record['summary'])
     previous = read_manifest(record, voice)
     if matches(previous, chunks):
+        publication_progress(record, voice, 100, ready=True)
         return engine
+    publication_progress(record, voice, 1)
     if engine is None:
         from native_voice import NativeVoice
         engine = NativeVoice(ROOT)
@@ -153,6 +176,7 @@ def build(record, voice, engine=None):
         pcm_parts.append(pcm)
         durations.append(len(pcm) / (sample_rate * 2))
         if index % 10 == 0:
+            publication_progress(record, voice, max(1, round((index + 1) / len(chunks) * 94)))
             print(f'{record["id"]} {voice} {index + 1}/{len(chunks)} RTF={elapsed / duration:.2f}', flush=True)
     tracks, uploads = {}, []
     revision = hashlib.sha256()
@@ -186,6 +210,9 @@ def build(record, voice, engine=None):
     manifest = {'version': 1, 'audioRevision': revision.hexdigest()[:24], 'sourceHash': source_hash(record), 'voice': voice, 'chunks': chunks, 'tracks': tracks}
     # Commit the manifest LAST: readers can never discover a half-written track.
     upload(base + '/manifest.json', json.dumps(manifest, ensure_ascii=False).encode(), 'application/json')
+    if not matches(read_manifest(record, voice), chunks):
+        raise RuntimeError('Published audio verification failed')
+    publication_progress(record, voice, 100, ready=True)
     print(f'READY {record["id"]} {voice} {tracks["gentle"]["duration"]:.1f}s', flush=True)
     return engine
 
@@ -216,9 +243,12 @@ def main():
     engine = None
     for row in selected:
         for voice in ([args.voice] if args.voice else ['F1', 'F2', 'M1', 'M2']):
-            engine = build(row, voice, engine)
+            try:
+                engine = build(row, voice, engine)
+            except Exception:
+                publication_progress(row, voice, 0, error='음성 준비를 마치지 못했습니다. 다음 작업에서 자동으로 다시 시도합니다.')
+                raise
 
 
 if __name__ == '__main__':
     main()
-
