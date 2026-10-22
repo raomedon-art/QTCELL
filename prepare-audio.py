@@ -231,7 +231,7 @@ def watch_queue(seconds=18900, poll_seconds=20):
     deadline = time.monotonic() + seconds
     engine, model_ready = None, False
     retry_after, backlog = {}, []
-    next_scan = 0
+    scanned_existing = False
     while time.monotonic() < deadline:
         selected = None
         try:
@@ -242,22 +242,23 @@ def watch_queue(seconds=18900, poll_seconds=20):
                     selected = (record, 'F1')
                     break
             if selected is None:
-                if not backlog and time.monotonic() >= next_scan:
+                if not backlog and not scanned_existing:
                     rows = records()
                     rows.insert(0, {'id': 'preview', 'summary': PREVIEW})
                     by_id = {record['id']: record for record in rows}
                     backlog = [(by_id[job['id']], job['voice']) for job in missing_jobs(rows)]
-                    next_scan = time.monotonic() + 300
+                    scanned_existing = True
                     # New pending records discovered during the scan take priority
                     # on the next iteration, before this optional backlog.
                     continue
-                while backlog:
+                for _ in range(len(backlog)):
                     candidate = backlog.pop(0)
                     record, voice = candidate
                     key = (record['id'], source_hash(record), voice)
                     if retry_after.get(key, 0) <= time.monotonic():
                         selected = candidate
                         break
+                    backlog.append(candidate)
             if selected is None:
                 time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
                 continue
@@ -269,11 +270,18 @@ def watch_queue(seconds=18900, poll_seconds=20):
                 model_ready = True
             engine = build(record, voice, engine)
             retry_after.pop((record['id'], source_hash(record), voice), None)
+            if voice == 'F1' and record.get('publication_status') == 'pending':
+                # Complete optional voices without repeatedly downloading every
+                # existing manifest during idle polling (free egress is limited).
+                published = dict(record, publication_status='published')
+                backlog.extend((published, other) for other in ['F2', 'M1', 'M2'])
         except Exception as error:
             print(f'QUEUE RETRY {type(error).__name__}', flush=True)
             if selected:
                 record, voice = selected
                 retry_after[(record['id'], source_hash(record), voice)] = time.monotonic() + 60
+                if record.get('publication_status') != 'pending':
+                    backlog.append(selected)
                 try:
                     publication_progress(record, voice, 0, error='음성 준비를 다시 시도하고 있습니다. 글은 안전하게 저장되어 있습니다.')
                 except Exception:
