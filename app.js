@@ -108,6 +108,48 @@ let currentDetailRecordId = null;
 let pendingDeleteRecordId = null;
 let cloudRefreshPromise = null;
 let uploadFormDirty = false;
+let uploadInFlight = false;
+let uploadRecordId = null;
+
+// Bound both the request and response body; abort a stalled connection rather
+// than leaving the submit button locked forever. No write is retried silently.
+async function registrationRequest(path, { method = 'GET', body, headers = {}, timeoutMs = 45000 } = {}) {
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(CLOUD_CONFIG.supabaseUrl + path, {
+          method, body, signal: controller.signal,
+          headers: { apikey: CLOUD_CONFIG.supabaseAnonKey, ...headers },
+        });
+        const text = await response.text();
+        let result;
+        try { result = text ? JSON.parse(text) : null; } catch { result = null; }
+        if (!response.ok) {
+          const error = new Error(result?.message || result?.error || '서버에 저장하지 못했습니다.');
+          error.status = response.status;
+          throw error;
+        }
+        return result;
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('서버 응답이 지연되고 있습니다. 입력 내용은 유지됩니다. 다시 눌러 저장을 확인해주세요.'));
+          controller.abort();
+        }, timeoutMs);
+      }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+function showUploadStatus(message, failed = false) {
+  const status = document.querySelector('#upload-status');
+  if (!status) return;
+  status.hidden = !message;
+  status.textContent = message;
+  status.style.color = failed ? '#a1362c' : '';
+}
 let currentRecordPage = 1;
 
 if (!Array.isArray(members) || !members.length) members = [...DEFAULT_MEMBERS];
@@ -574,36 +616,40 @@ async function loadCloudState() {
   writeJson(localStorage, KEYS.members, members);
 }
 
-async function saveCloudRecord(record, file, contentHtml = "", { isNew = false } = {}) {
+async function saveCloudRecord(record, file, contentHtml = "", { isNew = false, onProgress = () => {} } = {}) {
   const previousPath = record.filePath || "";
   let nextPath = previousPath;
   if (file) {
     nextPath = cloudFilePath(record.id, file.name);
-    const uploadResult = await cloudClient.storage.from(cloudBucket).upload(nextPath, file, {
-      cacheControl: "3600",
-      contentType: file.type || undefined,
-      upsert: true,
+    onProgress('첨부 파일을 저장하고 있습니다…');
+    await registrationRequest(`/storage/v1/object/${encodeURIComponent(cloudBucket)}/${nextPath}`, {
+      method: 'POST', body: file, timeoutMs: 90000,
+      headers: { 'Content-Type': file.type || 'application/octet-stream', 'x-upsert': 'true', 'Cache-Control': 'max-age=3600' },
     });
-    if (uploadResult.error) throw uploadResult.error;
   }
 
   const nextRecord = { ...record, contentHtml, filePath: nextPath };
-  const saveResult = await cloudClient
-    .from(CLOUD_TABLES.records)
-    .upsert(cloudRecordToRow(nextRecord, contentHtml, { useServerCreatedAt: isNew }))
-    .select("*")
-    .single();
-  if (saveResult.error) throw saveResult.error;
-  Object.assign(record, saveResult.data ? cloudRecordFromRow(saveResult.data) : nextRecord);
+  onProgress('본문을 저장하고 음성 준비를 접수하고 있습니다…');
+  const savedRows = await registrationRequest(`/rest/v1/${CLOUD_TABLES.records}?on_conflict=id&select=*`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation,missing=default' },
+    body: JSON.stringify(cloudRecordToRow(nextRecord, contentHtml, { useServerCreatedAt: isNew })),
+  });
+  if (!savedRows?.[0]?.id) throw new Error('저장 결과를 확인하지 못했습니다. 입력 내용은 유지되니 다시 시도해주세요.');
+  Object.assign(record, cloudRecordFromRow(savedRows[0]));
 
   if (file && previousPath && previousPath !== nextPath) {
-    await cloudClient.storage.from(cloudBucket).remove([previousPath]);
+    // The record is already saved. Attachment cleanup must not block success.
+    registrationRequest(`/storage/v1/object/${encodeURIComponent(cloudBucket)}`, {
+      method: 'DELETE', body: JSON.stringify({ prefixes: [previousPath] }),
+      headers: { 'Content-Type': 'application/json' },
+    }).catch(error => console.warn('Previous attachment cleanup deferred', error.message));
   }
 }
 
-async function saveRecordData(record, file, contentHtml = "", { isNew = false } = {}) {
+async function saveRecordData(record, file, contentHtml = "", { isNew = false, onProgress } = {}) {
   if (cloudEnabled) {
-    await saveCloudRecord(record, file, contentHtml, { isNew });
+    await saveCloudRecord(record, file, contentHtml, { isNew, onProgress });
   } else {
     await saveLocalAsset(record.id, file, contentHtml);
     setRecordContentHtml(record, contentHtml);
@@ -1010,6 +1056,9 @@ function restoreEditorSelection(editor = activeEditor) {
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    const timer = setTimeout(() => { reject(new Error('이미지를 읽는 시간이 초과되었습니다. 이미지를 다시 선택해주세요.')); reader.abort(); }, 15000);
+    reader.onloadend = () => clearTimeout(timer);
+    reader.onabort = () => reject(new Error('이미지 읽기가 중단되었습니다.'));
     reader.onload = () => resolve(reader.result);
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
@@ -1017,16 +1066,23 @@ function readFileAsDataUrl(file) {
 }
 
 async function makeContainerImagesPersistent(container) {
+  async function readBlobImage(src) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(src, { signal: controller.signal });
+      if (!response.ok) throw new Error('이미지를 읽지 못했습니다.');
+      return await readFileAsDataUrl(await response.blob());
+    } finally { clearTimeout(timer); }
+  }
   const images = [...container.querySelectorAll("img")];
   for (const image of images) {
     const src = image.getAttribute("src") || "";
     if (!src.startsWith("blob:")) continue;
     try {
-      const response = await fetch(src);
-      if (!response.ok) throw new Error("이미지를 읽지 못했습니다.");
-      image.setAttribute("src", await readFileAsDataUrl(await response.blob()));
+      image.setAttribute("src", await readBlobImage(src));
     } catch {
-      image.removeAttribute("src");
+      throw new Error('붙여넣은 이미지를 저장하지 못했습니다. 본문은 그대로 있습니다. 해당 이미지를 다시 삽입해주세요.');
     }
   }
 
@@ -1036,12 +1092,10 @@ async function makeContainerImagesPersistent(container) {
     const match = backgroundImage.match(/url\(["']?(blob:[^)"']+)/i);
     if (!match) continue;
     try {
-      const response = await fetch(match[1]);
-      if (!response.ok) throw new Error("배경 이미지를 읽지 못했습니다.");
-      const dataUrl = await readFileAsDataUrl(await response.blob());
+      const dataUrl = await readBlobImage(match[1]);
       element.style.backgroundImage = `url("${dataUrl}")`;
     } catch {
-      element.style.removeProperty("background-image");
+      throw new Error('붙여넣은 배경 이미지를 저장하지 못했습니다. 해당 이미지를 다시 삽입해주세요.');
     }
   }
 }
@@ -1472,14 +1526,15 @@ dropZone.addEventListener("drop", (event) => {
 
 uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!hasUploadPermission()) return;
+  if (uploadInFlight) return;
+  if (!hasUploadPermission()) { showUploadStatus('관리자로 로그인한 뒤 다시 등록해주세요.', true); return; }
   const data = new FormData(uploadForm);
   // Attachments are always optional. The record is saved from its meditation
   // range or editor content even when no file has been selected.
   const file = fileInput.files[0] || null;
   if (file && !validateUpload(file)) return;
 
-  const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+  const id = uploadRecordId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
   const meetingDate = String(data.get("meetingDate") || "");
   const passage = String(data.get("passage") || "").trim();
   const summaryText = richEditor.innerText.trim();
@@ -1506,10 +1561,15 @@ uploadForm.addEventListener("submit", async (event) => {
   };
 
   const submitButton = uploadForm.querySelector('button[type="submit"]');
+  uploadRecordId = id;
+  uploadInFlight = true;
   setButtonBusy(submitButton, true, "등록 중…");
+  showUploadStatus('본문과 이미지를 확인하고 있습니다…');
   try {
     const contentHtml = await prepareEditorHtmlForSave(richEditor);
-    await saveRecordData(record, file, contentHtml, { isNew: true });
+    await saveRecordData(record, file, contentHtml, { isNew: true, onProgress: showUploadStatus });
+    uploadRecordId = null;
+    showUploadStatus('등록되었습니다. 음성 준비가 끝나면 자동으로 게시됩니다.');
     uploadForm.reset();
     fileInput.value = "";
     richEditor.innerHTML = "";
@@ -1522,8 +1582,10 @@ uploadForm.addEventListener("submit", async (event) => {
     showToast(record.publicationStatus === 'pending' ? "글을 보관했습니다. 음성 준비가 끝나면 자동으로 게시됩니다." : "자료를 등록했어요.");
   } catch (error) {
     console.error("Record save failed", error);
-    showToast("자료 저장 중 문제가 생겼어요. 다시 시도해주세요.");
+    showUploadStatus(error.message || '저장하지 못했습니다. 입력 내용은 유지되니 다시 시도해주세요.', true);
+    showToast('등록하지 못했습니다. 버튼 위의 안내를 확인해주세요.');
   } finally {
+    uploadInFlight = false;
     setButtonBusy(submitButton, false);
   }
 });
