@@ -13,43 +13,24 @@ on:
 permissions:
   contents: read
 
+# Keep a successor pending while the active builder watches for new uploads.
+# Never cancel a voice that is being generated.
 concurrency:
   group: prepare-listening-audio
   cancel-in-progress: false
 
 jobs:
-  plan:
+  prepare:
     if: github.repository == 'raomedon-art/QTCELL'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-      count: ${{ steps.plan.outputs.count }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: plan
-        run: python prepare-audio.py --plan
-
-  prepare:
-    needs: plan
-    if: needs.plan.outputs.count != '0'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 16
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install onnxruntime==1.23.2 numpy==2.2.6 imageio-ffmpeg==0.6.0
-      - name: Prepare continuous audio and publish to the existing private bucket
-        env:
-          RECORD_ID: ${{ matrix.id }}
-          VOICE: ${{ matrix.voice }}
+      - name: Watch uploads and publish verified audio
         run: |
           export FFMPEG="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          "$FFMPEG" -version
-          python -u prepare-audio.py --id "$RECORD_ID" --voice "$VOICE"
+          python -u prepare-audio.py --watch --watch-seconds 18900
