@@ -217,13 +217,83 @@ def build(record, voice, engine=None):
     return engine
 
 
+def pending_records():
+    return json.loads(request('/rest/v1/qtcell_records?select=id,summary,content_html,publication_status,audio_source_hash&publication_status=eq.pending&order=created_at.asc&limit=1000'))
+
+
+def watch_queue(seconds=18900, poll_seconds=20):
+    """Keep the builder ready between uploads instead of relying on cron latency.
+
+    One workflow owns this loop through the existing concurrency group. Recheck
+    pending default voices before every optional voice, retaining the loaded
+    model. Stop before the runner limit so the queued successor can take over.
+    """
+    deadline = time.monotonic() + seconds
+    engine, model_ready = None, False
+    retry_after, backlog = {}, []
+    next_scan = 0
+    while time.monotonic() < deadline:
+        selected = None
+        try:
+            pending = pending_records()
+            for record in pending:
+                key = (record['id'], source_hash(record), 'F1')
+                if retry_after.get(key, 0) <= time.monotonic():
+                    selected = (record, 'F1')
+                    break
+            if selected is None:
+                if not backlog and time.monotonic() >= next_scan:
+                    rows = records()
+                    rows.insert(0, {'id': 'preview', 'summary': PREVIEW})
+                    by_id = {record['id']: record for record in rows}
+                    backlog = [(by_id[job['id']], job['voice']) for job in missing_jobs(rows)]
+                    next_scan = time.monotonic() + 300
+                    # New pending records discovered during the scan take priority
+                    # on the next iteration, before this optional backlog.
+                    continue
+                while backlog:
+                    candidate = backlog.pop(0)
+                    record, voice = candidate
+                    key = (record['id'], source_hash(record), voice)
+                    if retry_after.get(key, 0) <= time.monotonic():
+                        selected = candidate
+                        break
+            if selected is None:
+                time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
+                continue
+            record, voice = selected
+            # Show that the queue has been accepted even during first model setup.
+            publication_progress(record, voice, 1)
+            if not model_ready:
+                download_model()
+                model_ready = True
+            engine = build(record, voice, engine)
+            retry_after.pop((record['id'], source_hash(record), voice), None)
+        except Exception as error:
+            print(f'QUEUE RETRY {type(error).__name__}', flush=True)
+            if selected:
+                record, voice = selected
+                retry_after[(record['id'], source_hash(record), voice)] = time.monotonic() + 60
+                try:
+                    publication_progress(record, voice, 0, error='음성 준비를 다시 시도하고 있습니다. 글은 안전하게 저장되어 있습니다.')
+                except Exception:
+                    pass
+            time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
+    print('Queue worker completed its rotation window', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--plan', action='store_true')
     parser.add_argument('--id')
     parser.add_argument('--voice', choices=['F1', 'F2', 'M1', 'M2'])
     parser.add_argument('--local-model', action='store_true')
+    parser.add_argument('--watch', action='store_true')
+    parser.add_argument('--watch-seconds', type=int, default=18900)
     args = parser.parse_args()
+    if args.watch:
+        watch_queue(args.watch_seconds)
+        return
     rows = records()
     rows.insert(0, {'id': 'preview', 'content_html': '', 'summary': PREVIEW})
     if args.plan:
