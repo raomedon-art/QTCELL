@@ -112,7 +112,7 @@ def missing_jobs(rows):
     candidates = []
     for record in rows:
         chunks = chunks_for(record['summary'])
-        for voice in ['F1', 'F2', 'M1', 'M2']:
+        for voice in ['F1']:
             candidates.append((record, voice, chunks))
     def missing(candidate):
         record, voice, chunks = candidate
@@ -153,6 +153,8 @@ def chunks_for(text):
 
 
 def build(record, voice, engine=None):
+    if voice != 'F1':
+        raise ValueError('Only F1 is enabled')
     base = prefix(record, voice)
     chunks = chunks_for(record['summary'])
     previous = read_manifest(record, voice)
@@ -270,11 +272,6 @@ def watch_queue(seconds=18900, poll_seconds=20):
                 model_ready = True
             engine = build(record, voice, engine)
             retry_after.pop((record['id'], source_hash(record), voice), None)
-            if voice == 'F1' and record.get('publication_status') == 'pending':
-                # Complete optional voices without repeatedly downloading every
-                # existing manifest during idle polling (free egress is limited).
-                published = dict(record, publication_status='published')
-                backlog.extend((published, other) for other in ['F2', 'M1', 'M2'])
         except Exception as error:
             print(f'QUEUE RETRY {type(error).__name__}', flush=True)
             if selected:
@@ -294,7 +291,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--plan', action='store_true')
     parser.add_argument('--id')
-    parser.add_argument('--voice', choices=['F1', 'F2', 'M1', 'M2'])
+    parser.add_argument('--voice', choices=['F1'])
     parser.add_argument('--local-model', action='store_true')
     parser.add_argument('--watch', action='store_true')
     parser.add_argument('--watch-seconds', type=int, default=18900)
@@ -320,7 +317,7 @@ def main():
         download_model()
     engine = None
     for row in selected:
-        for voice in ([args.voice] if args.voice else ['F1', 'F2', 'M1', 'M2']):
+        for voice in ([args.voice] if args.voice else ['F1']):
             try:
                 engine = build(row, voice, engine)
             except Exception:
